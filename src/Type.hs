@@ -1,9 +1,9 @@
-module HVMS.Type where
+module Type where
 
 import Data.Word
+import Foreign.C.String
 import GHC.Float
 import GHC.Int
-import Foreign.C.String
 import qualified Data.Map.Strict as MS
 
 

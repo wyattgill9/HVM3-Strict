@@ -1,10 +1,10 @@
-module HVMS.Inject where
+module Inject where
 
 import Control.Monad (foldM)
 import Data.Word
 import Foreign.C.String (newCString)
+import Type
 import qualified Data.Map as Map
-import HVMS.Type
 
 type VarMap = Map.Map String Loc
 

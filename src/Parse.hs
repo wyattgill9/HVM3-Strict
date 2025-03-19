@@ -1,18 +1,16 @@
-module HVMS.Parse where
-
-import HVMS.Type
-import HVMS.Show (operToString)
+module Parse where
 
 import Data.Word
-import GHC.Int
+import Debug.Trace
 import GHC.Float
-import Text.Read (readMaybe)
+import GHC.Int
+import Show (operToString)
 import Text.Parsec
 import Text.Parsec.String
-
-import Debug.Trace
-import qualified Data.Map.Strict as MS
+import Text.Read (readMaybe)
+import Type
 import qualified Control.Applicative as Applicative
+import qualified Data.Map.Strict as MS
 
 -- Core Parser
 -- ----------

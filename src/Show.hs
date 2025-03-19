@@ -1,9 +1,9 @@
-module HVMS.Show where
+module Show where
 
-import Data.Word
 import Data.List
+import Data.Word
 import Numeric (showHex)
-import HVMS.Type
+import Type
 
 -- Core to String
 -- -------------

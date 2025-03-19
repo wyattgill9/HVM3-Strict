@@ -1,18 +1,16 @@
 module Main where
 
 import Control.Monad (when)
+import Extract
+import Inject
+import Parse
+import Show
 import System.CPUTime
 import System.Environment (getArgs)
 import System.Exit (exitWith, ExitCode(ExitSuccess, ExitFailure))
 import System.IO (readFile, print)
-
 import Text.Parsec
-
-import HVMS.Type
-import HVMS.Inject
-import HVMS.Extract
-import HVMS.Parse
-import HVMS.Show
+import Type
 
 -- Main
 -- ----

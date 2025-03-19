@@ -1,7 +1,7 @@
-module HVMS.Extract where
+module Extract where
 
 import Data.Word
-import HVMS.Type
+import Type
 
 -- Term to Core
 -- ------------
