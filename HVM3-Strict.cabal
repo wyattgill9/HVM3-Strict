@@ -15,17 +15,17 @@ common warnings
 
 executable hvms
     import:           warnings
-    main-is:          HVMS/Main.hs
-    other-modules:    HVMS.Type
-                    , HVMS.Extract
-                    , HVMS.Inject
-                    , HVMS.Parse
-                    , HVMS.Show
+    main-is:          Main.hs
+    other-modules:    Type
+                    , Extract
+                    , Inject
+                    , Parse
+                    , Show
     build-depends:    base ^>=4.21.0.0,
                       containers ^>=0.7,
                       parsec ^>=3.1.17.0,
     hs-source-dirs:   src
     default-language: GHC2024
-    c-sources:        src/HVMS/Runtime.c
+    c-sources:        src/Runtime.c
     extra-libraries:  c
     ghc-options:     -Wno-all
