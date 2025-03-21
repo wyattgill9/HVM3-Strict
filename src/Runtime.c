@@ -691,7 +691,7 @@ static void interact(Term neg, Term pos) {
 }
 
 // Evaluation
-static int normal_step() {
+static inline int normal_step() {
   // dump_buff();
 
   Loc loc = rbag_pop();
