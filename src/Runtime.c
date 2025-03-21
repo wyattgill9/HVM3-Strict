@@ -241,19 +241,33 @@ Term expand_ref(Loc def_idx) {
   }
 
   Def def = BOOK.defs[def_idx];
+  const u32 nodes_len = def.nodes_len;
+  const Term* nodes = def.nodes;
+  const Term* rbag = def.rbag;
+  const u32 rbag_len = def.rbag_len;
 
   Loc offset = RNOD_END - 1;
-  RNOD_END += def.nodes_len - 1;
+  RNOD_END += nodes_len - 1;
 
-  // insert non-root nodes
-  Term root = term_offset_loc(def.nodes[0], offset);
-  for (u32 i = 1; i < def.nodes_len; i++) {
-    set(i + offset, term_offset_loc(def.nodes[i], offset));
+  Term root = term_offset_loc(nodes[0], offset);
+  
+  // Unroll loop for non-root nodes
+  u32 i = 1;
+  for (; i + 3 < nodes_len; i += 4) {
+    set(i + offset, term_offset_loc(nodes[i], offset));
+    set(i + offset + 1, term_offset_loc(nodes[i + 1], offset));
+    set(i + offset + 2, term_offset_loc(nodes[i + 2], offset));
+    set(i + offset + 3, term_offset_loc(nodes[i + 3], offset));
+  }
+  
+  // Remaining nodes
+  for (; i < nodes_len; i++) {
+    set(i + offset, term_offset_loc(nodes[i], offset));
   }
 
-  // insert redexes
-  for (u32 i = 0; i < def.rbag_len; i += 2) {
-    rbag_push(term_offset_loc(def.rbag[i], offset), term_offset_loc(def.rbag[i + 1], offset));
+  // Redexes in batches of 2 (already aligned)
+  for (u32 i = 0; i < rbag_len; i += 2) {
+    rbag_push(term_offset_loc(rbag[i], offset), term_offset_loc(rbag[i + 1], offset));
   }
 
   return root;
