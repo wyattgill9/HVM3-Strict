@@ -275,9 +275,9 @@ Term expand_ref(Loc def_idx) {
 
 
 // Atomic Linker
-static void move(Loc neg_loc, u64 pos);
+static inline void move(Loc neg_loc, u64 pos);
 
-static void link(Term neg, Term pos) {
+static inline void link(Term neg, Term pos) {
   if (term_tag(pos) == VAR) {
     Term far = swap(term_loc(pos), neg);
     if (term_tag(far) != SUB) {
@@ -288,10 +288,11 @@ static void link(Term neg, Term pos) {
   }
 }
 
-static void move(Loc neg_loc, Term pos) {
+
+static inline void move(Loc neg_loc, Term pos) {
   Term neg = swap(neg_loc, pos);
   if (term_tag(neg) != SUB) {
-    take(neg_loc);
+    // No need to take() since we already swapped
     link(neg, pos);
   }
 }
