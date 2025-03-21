@@ -6,6 +6,8 @@
 #include <stdatomic.h>
 #include <string.h>
 #include <time.h>
+#include <pthread.h>
+// #include <unistd.h>
 
 typedef uint8_t  Tag;  //  8 bits
 typedef uint32_t Lab;  // 24 bits
@@ -768,4 +770,23 @@ void dump_buff() {
     printf("%06X %03X %03X %s\n", loc, term_loc(term), term_lab(term), tag_to_str(term_tag(term)));
   }
   printf("------------------\n");
+}
+
+void* thread_function(void* arg) {
+    printf("Thread %ld started\n", (long)arg);
+    return NULL;
+}
+
+void spawn_threads_equal_to_cores() {
+    long num_cores = 1; // sysconf(_SC_NPROCESSORS_ONLN);, tmp
+    if (num_cores < 1) {
+        perror("sysconf");
+        exit(EXIT_FAILURE);
+    }
+
+    pthread_t threads[num_cores];
+
+    for (long i = 0; i < num_cores; i++) {
+        pthread_create(&threads[i], NULL, thread_function, (void*)i);
+    }
 }
