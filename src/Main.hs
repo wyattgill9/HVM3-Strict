@@ -30,7 +30,7 @@ main = do
 
 cliRun :: FilePath -> Bool -> IO ()
 cliRun filePath showStats = do
-  start <- getCPUTime
+  -- Only count time for the interactions, not parsing and memory alloc
 
   hvmInit
 
@@ -43,6 +43,8 @@ cliRun filePath showStats = do
   main <- case maybeMain of
     Just main -> pure main
     Nothing -> exitWithError "missing 'main' definition"
+  
+  start <- getCPUTime
 
   term <- normalize main
 

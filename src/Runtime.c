@@ -778,7 +778,7 @@ void* thread_function(void* arg) {
 }
 
 void spawn_threads_equal_to_cores() {
-    long num_cores = 4; // sysconf(_SC_NPROCESSORS_ONLN);
+    long num_cores = 1; // sysconf(_SC_NPROCESSORS_ONLN);, tmp
     if (num_cores < 1) {
         perror("sysconf");
         exit(EXIT_FAILURE);
