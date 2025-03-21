@@ -395,45 +395,68 @@ u32 i32_to_u32(i32 i) { return *(u32*)&i; }
 u32 f32_to_u32(f32 f) { return *(u32*)&f; }
 
 static void interact_opynum(Loc a_loc, Lab op, u32 y, Tag y_type) {
-  #define CASES_u32(a, b)                     \
-            case OP_MOD: val = a %  b; break; \
-            case OP_AND: val = a &  b; break; \
-            case OP_OR : val = a |  b; break; \
-            case OP_XOR: val = a ^  b; break; \
-            case OP_LSH: val = a << b; break; \
-            case OP_RSH: val = a >> b; break;
-  #define CASES_i32(a, b) CASES_u32(a, b)
-  #define CASES_f32(a, b)
-
-  #define PERFORM_OP(x, y, op, type)          \
-    {                                         \
-        type val;                             \
-        type a = u32_to_##type(x);            \
-        type b = u32_to_##type(y);            \
-        switch (op) {                         \
-            case OP_ADD: val = a +  b; break; \
-            case OP_SUB: val = a -  b; break; \
-            case OP_MUL: val = a *  b; break; \
-            case OP_DIV: val = a /  b; break; \
-            case OP_EQ : val = a == b; break; \
-            case OP_NE : val = a != b; break; \
-            case OP_LT : val = a <  b; break; \
-            case OP_GT : val = a >  b; break; \
-            case OP_LTE: val = a <= b; break; \
-            case OP_GTE: val = a >= b; break; \
-            CASES_##type(x, y)                \
-        }                                     \
-        res = type##_to_u32(val);             \
-    }
-
-  u32 x   = term_loc(take(port(1, a_loc)));
+  u32 x = term_loc(take(port(1, a_loc)));
   Loc ret = port(2, a_loc);
   u32 res;
 
-  switch (y_type) {
-    case U32: PERFORM_OP(x, y, op, u32); break;
-    case I32: PERFORM_OP(x, y, op, i32); break;
-    case F32: PERFORM_OP(x, y, op, f32); break;
+  // Optimized fast path for common case U32)
+  if (y_type == U32) {
+    switch (op) {
+      case OP_ADD: res = x + y; break;
+      case OP_SUB: res = x - y; break;
+      case OP_MUL: res = x * y; break;
+      case OP_DIV: res = x / y; break;
+      case OP_EQ : res = x == y; break;
+      case OP_NE : res = x != y; break;
+      case OP_LT : res = x < y; break;
+      case OP_GT : res = x > y; break;
+      case OP_LTE: res = x <= y; break;
+      case OP_GTE: res = x >= y; break;
+      case OP_MOD: res = x % y; break;
+      case OP_AND: res = x & y; break;
+      case OP_OR : res = x | y; break;
+      case OP_XOR: res = x ^ y; break;
+      case OP_LSH: res = x << y; break;
+      case OP_RSH: res = x >> y; break;
+      default: res = 0;
+    }
+  } else {
+    // if not, defer
+    #define CASES_u32(a, b)                     \
+              case OP_MOD: val = a %  b; break; \
+              case OP_AND: val = a &  b; break; \
+              case OP_OR : val = a |  b; break; \
+              case OP_XOR: val = a ^  b; break; \
+              case OP_LSH: val = a << b; break; \
+              case OP_RSH: val = a >> b; break;
+    #define CASES_i32(a, b) CASES_u32(a, b)
+    #define CASES_f32(a, b)
+
+    #define PERFORM_OP(x, y, op, type)          \
+      {                                         \
+          type val;                             \
+          type a = u32_to_##type(x);            \
+          type b = u32_to_##type(y);            \
+          switch (op) {                         \
+              case OP_ADD: val = a +  b; break; \
+              case OP_SUB: val = a -  b; break; \
+              case OP_MUL: val = a *  b; break; \
+              case OP_DIV: val = a /  b; break; \
+              case OP_EQ : val = a == b; break; \
+              case OP_NE : val = a != b; break; \
+              case OP_LT : val = a <  b; break; \
+              case OP_GT : val = a >  b; break; \
+              case OP_LTE: val = a <= b; break; \
+              case OP_GTE: val = a >= b; break; \
+              CASES_##type(a, b)                \
+          }                                     \
+          res = type##_to_u32(val);             \
+      }
+
+    switch (y_type) {
+      case I32: PERFORM_OP(x, y, op, i32); break;
+      case F32: PERFORM_OP(x, y, op, f32); break;
+    }
   }
 
   move(ret, term_new(y_type, 0, res));
