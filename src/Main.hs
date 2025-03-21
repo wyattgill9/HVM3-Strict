@@ -32,7 +32,12 @@ cliRun :: FilePath -> Bool -> IO ()
 cliRun filePath showStats = do
   -- Only count time for the interactions, not parsing and memory alloc
   startInitTime <- getCPUTime
+
   hvmInit
+
+  endInitTime <- getCPUTime
+
+  startParseTime <- getCPUTime
 
   code <- readFile filePath
   book <- case doParseBook code of
@@ -44,7 +49,7 @@ cliRun filePath showStats = do
     Just main -> pure main
     Nothing -> exitWithError "missing 'main' definition"
  
-  endInitTime <- getCPUTime
+  endParseTime <- getCPUTime
   startNormalizeTime <- getCPUTime
 
   term <- normalize main
@@ -58,14 +63,16 @@ cliRun filePath showStats = do
   when showStats $ do
     endExtractTime <- getCPUTime
     let initTime = fromIntegral (endInitTime - startInitTime) / (10^9) :: Double
+    let parseTime = fromIntegral (endParseTime - startParseTime) / (10^9) :: Double
     let normalizeTime = fromIntegral (endNormalizeTime - startNormalizeTime) / (10^9) :: Double
     let extractTime = fromIntegral (endExtractTime - startExtractTime) / (10^9) :: Double
-    let totalTime = initTime + normalizeTime + extractTime
+    let totalTime = initTime + parseTime + normalizeTime + extractTime
     itr <- incItr
     len <- rnodEnd
     let mips = (fromIntegral itr / 1000000.0) / (((normalizeTime + extractTime ))/ 1000.0)
     putStrLn $ "ITRS: " ++ show itr
     putStrLn $ "INIT-TIME: " ++ show initTime ++ "ms"
+    putStrLn $ "PARSE-TIME: " ++ show parseTime ++ "ms"
     putStrLn $ "NORMALIZE-TIME: " ++ show normalizeTime ++ "ms"
     putStrLn $ "EXTRACT-TIME: " ++ show extractTime ++ "ms"
     putStrLn $ "TOTAL-TIME: " ++ show totalTime ++ "ms"
