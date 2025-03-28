@@ -10,11 +10,7 @@
 #define DEBUG_LOG(fmt, ...) printf("[DEBUG] " fmt "\n", ##__VA_ARGS__)
 
 // WINDOWS WIP
-#if defined(WIN16) || defined(WIN32) || defined(WIN64) || defined(_WIN16) ||   \
-    defined(_WIN32) || defined(_WIN64) || defined(__TOS_WIN__) ||              \
-    defined(__WIN16) || defined(__WIN16__) || defined(__WIN32) ||              \
-    defined(__WIN32__) || defined(__WIN64) || defined(__WIN64__) ||            \
-    defined(__WINDOWS__)
+#if defined(WIN16) || defined(WIN32) || defined(WIN64) || defined(_WIN16) ||  defined(_WIN32) || defined(_WIN64) || defined(__TOS_WIN__) || defined(__WIN16) || defined(__WIN16__) || defined(__WIN32) || defined(__WIN32__) || defined(__WIN64) || defined(__WIN64__) || defined(__WINDOWS__)
 
 #include <windows.h>
 
@@ -69,8 +65,7 @@ int thread_join(HANDLE thread, void **retval) {
   return 0;
 }
 
-#elif defined(Macintosh) || defined(__APPLE__) || defined(__MACH__) ||         \
-    defined(macintosh)
+#elif defined(Macintosh) || defined(__APPLE__) || defined(__MACH__) || defined(macintosh)
 
 #include <pthread.h>
 #include <sys/sysctl.h>
@@ -122,9 +117,9 @@ int thread_join(pthread_t thread, void **retval) {
 
 #endif
 
-#define MAX_THREADS get_num_threads()
+//#define MAX_THREADS get_num_threads()
 
-// int MAX_THREADS = 1;
+int MAX_THREADS = 2;
 
 typedef uint8_t Tag;   //  8 bits
 typedef uint32_t Lab;  // 24 bits
@@ -256,31 +251,55 @@ Loc alloc_node(u64 arity) {
   return loc;
 }
 
-u64 inc_itr() { return RBAG_END / 2; }
+u64 inc_itr() { return atomic_load(&RNOD_END) / 2; } // if (atomic_load(&RNOD_END) % 2 == 0) { return atomic_load(&RNOD_END) / 2; } }
 
 Loc rbag_push(Term neg, Term pos) {
-  Loc loc = RBAG + RBAG_END;
-  RBAG_END += 2;
-  set(loc + 0, neg);
-  set(loc + 1, pos);
-  return loc;
+    // Atomically fetch and add to increment RBAG_END
+    // This ensures thread-safe allocation of a new location pair
+    u64 current_end = atomic_fetch_add(&RBAG_END, 2);
+    
+    // Calculate the absolute location for this pair
+    Loc loc = RBAG + current_end;
+    
+    // Set the negative and positive terms 
+    // Note: set() is assumed to be a thread-safe term setting function
+    set(loc + 0, neg);
+    set(loc + 1, pos);
+    
+    // Return the location of the newly pushed pair
+    return loc;
 }
 
 Loc rbag_pop() {
-  if (RBAG_INI < RBAG_END) {
-    Loc loc = RBAG + RBAG_INI;
-    RBAG_INI += 2;
-    return loc;
-  }
-
-  return 0;
+    // Use atomic fetch_add to increment RBAG_INI atomically
+    // This ensures thread-safe access to the reduction bag
+    u64 current_ini = atomic_fetch_add(&RBAG_INI, 2);
+    
+    // Check if we've reached or exceeded the end of the reduction bag
+    if (current_ini < atomic_load(&RBAG_END)) {
+        // Calculate and return the location
+        // current_ini represents the starting index of the location pair
+        return RBAG + current_ini;
+    }
+    
+    // If we've exhausted the reduction bag, return 0
+    return 0;
 }
 
-Loc rbag_ini() { return RBAG + RBAG_INI; }
+Loc rbag_ini() { 
+    // Atomically load the current initial index of the reduction bag
+    return RBAG + atomic_load(&RBAG_INI); 
+}
 
-Loc rbag_end() { return RBAG + RBAG_END; }
+Loc rbag_end() { 
+    // Atomically load the current end index of the reduction bag
+    return RBAG + atomic_load(&RBAG_END); 
+}
 
-Loc rnod_end() { return RNOD_END; }
+Loc rnod_end() { 
+    // Atomically load the current end of the reduction nodes
+    return atomic_load(&RNOD_END); 
+}
 
 // Book operations
 
@@ -296,13 +315,17 @@ void def_new(char *name) {
 
     BOOK.defs = realloc(BOOK.defs, sizeof(Def) * BOOK.cap);
   }
+  
+  u64 rbag_end = atomic_load(&RBAG_END);
+  u64 rnod_end = atomic_load(&RNOD_END);
+
 
   Def def = {
       .name = name,
-      .nodes = calloc(RNOD_END, sizeof(Term)),
-      .nodes_len = RNOD_END,
-      .rbag = calloc(RBAG_END, sizeof(Term)),
-      .rbag_len = RBAG_END,
+      .nodes = calloc(rnod_end, sizeof(Term)),
+      .nodes_len = rnod_end,
+      .rbag = calloc(rbag_end, sizeof(Term)),
+      .rbag_len = rbag_end,
   };
 
   memcpy(def.nodes, BUFF, sizeof(Term) * def.nodes_len);
@@ -315,8 +338,8 @@ void def_new(char *name) {
   memset(BUFF, 0, sizeof(Term) * def.nodes_len);
   memset(BUFF + RBAG, 0, sizeof(Term) * def.rbag_len);
 
-  RNOD_END = 0;
-  RBAG_END = 0;
+  atomic_store(&RNOD_END, 0);
+  atomic_store(&RBAG_END, 0);
 
   BOOK.defs[BOOK.len] = def;
   BOOK.len++;
@@ -1022,11 +1045,11 @@ void hvm_init() {
     BUFF = aligned_alloc(64, (1ULL << 24) * sizeof(a64));
   }
   memset(BUFF, 0, (1ULL << 24) * sizeof(a64));
-  RNOD_INI = 0;
 
-  RNOD_END = 0;
-  RBAG_INI = 0;
-  RBAG_END = 0;
+  atomic_store(&RNOD_INI, 0);
+  atomic_store(&RNOD_END, 0);
+  atomic_store(&RBAG_INI, 0);
+  atomic_store(&RBAG_END, 0);
 }
 
 void hvm_free() {
@@ -1057,6 +1080,7 @@ Term normalize(Term term) {
   /*while (normal_step());*/
 
   parallel_step();
+  printf("MAX_THREADS: %u\n", MAX_THREADS);
   return get(0);
 }
 
