@@ -1,13 +1,137 @@
 // HVM3 Core: single-thread, polarized, LAM/APP & DUP/SUP only
 
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdatomic.h>
 #include <string.h>
-#include <time.h>
-#include <pthread.h>
-// #include <unistd.h>
+
+#define DEBUG_LOG(fmt, ...) printf("[DEBUG] " fmt "\n", ##__VA_ARGS__)
+
+// WINDOWS WIP
+#if defined(WIN16) || defined(WIN32) || defined(WIN64) || defined(_WIN16) || defined(_WIN32) || defined(_WIN64) || defined(__TOS_WIN__) || defined(__WIN16) || defined(__WIN16__) || defined(__WIN32) || defined(__WIN32__) || defined(__WIN64) || defined(__WIN64__) || defined(__WINDOWS__)
+   
+    #include <windows.h>
+    
+    typedef HANDLE thread_t;
+    
+    int get_num_threads() {
+        SYSTEM_INFO sysinfo;
+        GetSystemInfo(&sysinfo);
+        return sysinfo.dwNumberOfProcessors;
+    }
+
+    typedef void* (*thread_func)(void*);
+
+    int thread_create(
+        thread_t *thread,             
+        void *attr,                
+        thread_func start_routine,  
+        void *arg                   
+    ) {
+        if (attr != NULL) {
+            printf("Ignoring thread attributes in Windows version\n"); 
+        }
+
+        *thread = CreateThread(
+            NULL,                   // Default security attributes
+            0,                      // Default stack size
+            (LPTHREAD_START_ROUTINE)start_routine, // Thread function
+            arg,                    // Thread function argument
+            0,                      // Creation flags (0 = run immediately)
+            NULL                    // Thread ID (optional, can be NULL)
+        );
+
+        if (*thread == NULL) {
+            return GetLastError();
+        }
+
+        return 0;
+    }
+
+    int thread_join(HANDLE thread, void **retval) {
+        DWORD wait_result = WaitForSingleObject(thread, INFINITE);
+    
+        if (wait_result == WAIT_FAILED) {
+            return GetLastError();
+        }
+
+        if (retval != NULL) {
+            DWORD exit_code;
+            if (GetExitCodeThread(thread, &exit_code)) {
+                *retval = (void*)(intptr_t)exit_code;
+            }
+        }
+
+        CloseHandle(thread);
+
+        return 0;
+    }
+
+#elif defined(Macintosh) || defined(__APPLE__) || defined(__MACH__) || defined(macintosh)
+    
+    #include <pthread.h>
+    #include <sys/sysctl.h>
+    
+    typedef pthread_t thread_t;
+
+    int get_num_threads() {
+        int nm[2] = {CTL_HW, HW_AVAILCPU};
+        int count;
+        size_t len = sizeof(count);
+
+        if(sysctl(nm, 2, &count, &len, NULL, 0) || count < 1) {
+            nm[1] = HW_NCPU;
+            if(sysctl(nm, 2, &count, &len, NULL, 0) || count < 1) count = 1;
+        }
+        return count;
+    }
+     
+    int thread_create(
+        pthread_t *thread,             
+        const pthread_attr_t *attr,    
+        void *(*start_routine)(void*), 
+        void *arg                      
+    ) {
+        return pthread_create(thread, attr, start_routine, arg);
+    }
+
+    int thread_join(pthread_t thread, void **retval) {
+        return pthread_join(thread, retval);
+    }
+
+#else 
+    #include<unistd.h>
+    #include <pthread.h>
+ 
+    typedef pthread_t thread_t;
+
+
+    int get_num_threads() {
+        long nprocs = sysconf(_SC_NPROCESSORS_ONLN);
+        return (nprocs < 1) ? 1 : nprocs;
+    }
+    
+    int thread_create(
+        pthread_t *thread,             
+        const pthread_attr_t *attr,    
+        void *(*start_routine)(void*), 
+        void *arg                      
+    ) {
+        return pthread_create(thread, attr, start_routine, arg);
+    }
+
+    int thread_join(pthread_t thread, void **retval) {
+        return pthread_join(thread, retval);
+    }
+
+#endif
+
+#define MAX_THREADS get_num_threads()
+
+// int MAX_THREADS = 1;
+
 
 typedef uint8_t  Tag;  //  8 bits
 typedef uint32_t Lab;  // 24 bits
@@ -251,13 +375,17 @@ Term expand_ref(Loc def_idx) {
 
   Term root = term_offset_loc(nodes[0], offset);
   
-  // Unroll loop for non-root nodes
+  // Unroll loop, better branch prediction
   u32 i = 1;
-  for (; i + 3 < nodes_len; i += 4) {
+  for (; i + 7 < nodes_len; i += 8) {
     set(i + offset, term_offset_loc(nodes[i], offset));
     set(i + offset + 1, term_offset_loc(nodes[i + 1], offset));
     set(i + offset + 2, term_offset_loc(nodes[i + 2], offset));
     set(i + offset + 3, term_offset_loc(nodes[i + 3], offset));
+    set(i + offset + 4, term_offset_loc(nodes[i + 4], offset));
+    set(i + offset + 5, term_offset_loc(nodes[i + 5], offset));
+    set(i + offset + 6, term_offset_loc(nodes[i + 6], offset));
+    set(i + offset + 7, term_offset_loc(nodes[i + 7], offset));
   }
   
   // Remaining nodes
@@ -277,7 +405,7 @@ Term expand_ref(Loc def_idx) {
 // Atomic Linker
 static inline void move(Loc neg_loc, u64 pos);
 
-static inline void link(Term neg, Term pos) {
+static inline void link_terms(Term neg, Term pos) {
   if (term_tag(pos) == VAR) {
     Term far = swap(term_loc(pos), neg);
     if (term_tag(far) != SUB) {
@@ -293,7 +421,7 @@ static inline void move(Loc neg_loc, Term pos) {
   Term neg = swap(neg_loc, pos);
   if (term_tag(neg) != SUB) {
     // No need to take() since we already swapped
-    link(neg, pos);
+    link_terms(neg, pos);
   }
 }
 
@@ -324,36 +452,36 @@ static void interact_appsup(Loc a_loc, Loc b_loc) {
   set(port(2, cn1), term_new(SUB, 0, 0));
   set(port(1, cn2), term_new(VAR, 0, port(2, dp1)));
   set(port(2, cn2), term_new(SUB, 0, 0));
-  link(term_new(DUP, 0, dp1), arg);
+  link_terms(term_new(DUP, 0, dp1), arg);
   move(ret, term_new(SUP, 0, dp2));
-  link(term_new(APP, 0, cn1), tm1);
-  link(term_new(APP, 0, cn2), tm2);
+  link_terms(term_new(APP, 0, cn1), tm1);
+  link_terms(term_new(APP, 0, cn2), tm2);
 }
 
 static void interact_appnul(Loc a_loc) {
   Term arg = take(port(1, a_loc));
   Loc  ret = port(2, a_loc);
-  link(term_new(ERA, 0, 0), arg);
+  link_terms(term_new(ERA, 0, 0), arg);
   move(ret, term_new(NUL, 0, 0));
 }
 
 static void interact_appu32(Loc a_loc, u32 num) {
   Term arg = take(port(1, a_loc));
   Loc  ret = port(2, a_loc);
-  link(term_new(U32, 0, num), arg);
+  link_terms(term_new(U32, 0, num), arg);
   move(ret, term_new(U32, 0, num));
 }
 
 static void interact_opxnul(Loc a_loc) {
   Term arg = take(port(1, a_loc));
   Loc  ret = port(2, a_loc);
-  link(term_new(ERA, 0, 0), arg);
+  link_terms(term_new(ERA, 0, 0), arg);
   move(ret, term_new(NUL, 0, 0));
 }
 
 static void interact_opxnum(Loc a_loc, Lab op, u32 num, Tag num_type) {
   Term arg = swap(port(1, a_loc), term_new(num_type, 0, num));
-  link(term_new(OPY, op, a_loc), arg);
+  link_terms(term_new(OPY, op, a_loc), arg);
 }
 
 static void interact_opxsup(Loc a_loc, Lab op, Loc b_loc) {
@@ -373,16 +501,16 @@ static void interact_opxsup(Loc a_loc, Lab op, Loc b_loc) {
   set(port(2, cn1), term_new(SUB, 0, 0));
   set(port(1, cn2), term_new(VAR, 0, port(2, dp1)));
   set(port(2, cn2), term_new(SUB, 0, 0));
-  link(term_new(DUP, 0, dp1), arg);
+  link_terms(term_new(DUP, 0, dp1), arg);
   move(ret, term_new(SUP, 0, dp2));
-  link(term_new(OPX, op, cn1), tm1);
-  link(term_new(OPX, op, cn2), tm2);
+  link_terms(term_new(OPX, op, cn1), tm1);
+  link_terms(term_new(OPX, op, cn2), tm2);
 }
 
 static void interact_opynul(Loc a_loc) {
   Term arg = take(port(1, a_loc));
   Loc  ret = port(2, a_loc);
-  link(term_new(ERA, 0, 0), arg);
+  link_terms(term_new(ERA, 0, 0), arg);
   move(ret, term_new(NUL, 0, 0));
 }
 
@@ -397,68 +525,94 @@ u32 f32_to_u32(f32 f) { return *(u32*)&f; }
 static void interact_opynum(Loc a_loc, Lab op, u32 y, Tag y_type) {
   u32 x = term_loc(take(port(1, a_loc)));
   Loc ret = port(2, a_loc);
-  u32 res;
-
-  // Optimized fast path for common case U32)
+  u32 res = 0;
+    
+  // Optimized path using jump table & direct compute
   if (y_type == U32) {
-    switch (op) {
-      case OP_ADD: res = x + y; break;
-      case OP_SUB: res = x - y; break;
-      case OP_MUL: res = x * y; break;
-      case OP_DIV: res = x / y; break;
-      case OP_EQ : res = x == y; break;
-      case OP_NE : res = x != y; break;
-      case OP_LT : res = x < y; break;
-      case OP_GT : res = x > y; break;
-      case OP_LTE: res = x <= y; break;
-      case OP_GTE: res = x >= y; break;
-      case OP_MOD: res = x % y; break;
-      case OP_AND: res = x & y; break;
-      case OP_OR : res = x | y; break;
-      case OP_XOR: res = x ^ y; break;
-      case OP_LSH: res = x << y; break;
-      case OP_RSH: res = x >> y; break;
-      default: res = 0;
-    }
+    // Faster operation dispatch
+    static void* op_jumptable[] = {
+      [OP_ADD]  = &&do_add,  [OP_SUB]  = &&do_sub,
+      [OP_MUL]  = &&do_mul,  [OP_DIV]  = &&do_div,
+      [OP_EQ]   = &&do_eq,   [OP_NE]   = &&do_ne,
+      [OP_LT]   = &&do_lt,   [OP_GT]   = &&do_gt,
+      [OP_LTE]  = &&do_lte,  [OP_GTE]  = &&do_gte,
+      [OP_MOD]  = &&do_mod,  [OP_AND]  = &&do_and,
+      [OP_OR]   = &&do_or,   [OP_XOR]  = &&do_xor,
+      [OP_LSH]  = &&do_lsh,  [OP_RSH]  = &&do_rsh
+    };
+
+    // Faster branching
+    goto *op_jumptable[op];
+
+    do_add:  res = x + y;  goto done;
+    do_sub:  res = x - y;  goto done;
+    do_mul:  res = x * y;  goto done;
+    do_div:  res = x / y;  goto done;
+    do_eq:   res = x == y; goto done;
+    do_ne:   res = x != y; goto done;
+    do_lt:   res = x < y;  goto done;
+    do_gt:   res = x > y;  goto done;
+    do_lte:  res = x <= y; goto done;
+    do_gte:  res = x >= y; goto done;
+    do_mod:  res = x % y;  goto done;
+    do_and:  res = x & y;  goto done;
+    do_or:   res = x | y;  goto done;
+    do_xor:  res = x ^ y;  goto done;
+    do_lsh:  res = x << y; goto done;
+    do_rsh:  res = x >> y; goto done;
+
+    done:;
   } else {
-    // if not, defer
-    #define CASES_u32(a, b)                     \
-              case OP_MOD: val = a %  b; break; \
-              case OP_AND: val = a &  b; break; \
-              case OP_OR : val = a |  b; break; \
-              case OP_XOR: val = a ^  b; break; \
-              case OP_LSH: val = a << b; break; \
-              case OP_RSH: val = a >> b; break;
-    #define CASES_i32(a, b) CASES_u32(a, b)
-    #define CASES_f32(a, b)
-
-    #define PERFORM_OP(x, y, op, type)          \
-      {                                         \
-          type val;                             \
-          type a = u32_to_##type(x);            \
-          type b = u32_to_##type(y);            \
-          switch (op) {                         \
-              case OP_ADD: val = a +  b; break; \
-              case OP_SUB: val = a -  b; break; \
-              case OP_MUL: val = a *  b; break; \
-              case OP_DIV: val = a /  b; break; \
-              case OP_EQ : val = a == b; break; \
-              case OP_NE : val = a != b; break; \
-              case OP_LT : val = a <  b; break; \
-              case OP_GT : val = a >  b; break; \
-              case OP_LTE: val = a <= b; break; \
-              case OP_GTE: val = a >= b; break; \
-              CASES_##type(a, b)                \
-          }                                     \
-          res = type##_to_u32(val);             \
-      }
-
+    // Inlined type conversion and operation for i32 and f32
     switch (y_type) {
-      case I32: PERFORM_OP(x, y, op, i32); break;
-      case F32: PERFORM_OP(x, y, op, f32); break;
+      case I32: {
+        i32 a = u32_to_i32(x);
+        i32 b = u32_to_i32(y);
+        i32 val;
+        switch (op) {
+          case OP_ADD: val = a + b; break;
+          case OP_SUB: val = a - b; break;
+          case OP_MUL: val = a * b; break;
+          case OP_DIV: val = a / b; break;
+          case OP_EQ:  val = a == b; break;
+          case OP_NE:  val = a != b; break;
+          case OP_LT:  val = a < b; break;
+          case OP_GT:  val = a > b; break;
+          case OP_LTE: val = a <= b; break;
+          case OP_GTE: val = a >= b; break;
+          case OP_MOD: val = a % b; break;
+          case OP_AND: val = a & b; break;
+          case OP_OR:  val = a | b; break;
+          case OP_XOR: val = a ^ b; break;
+          case OP_LSH: val = a << b; break;
+          case OP_RSH: val = a >> b; break;
+          default: val = 0;
+        }
+        res = i32_to_u32(val);
+        break;
+      }
+      case F32: {
+        f32 a = u32_to_f32(x);
+        f32 b = u32_to_f32(y);
+        f32 val;
+        switch (op) {
+          case OP_ADD: val = a + b; break;
+          case OP_SUB: val = a - b; break;
+          case OP_MUL: val = a * b; break;
+          case OP_DIV: val = a / b; break;
+          case OP_EQ:  val = a == b; break;
+          case OP_NE:  val = a != b; break;
+          case OP_LT:  val = a < b; break;
+          case OP_GT:  val = a > b; break;
+          case OP_LTE: val = a <= b; break;
+          case OP_GTE: val = a >= b; break;
+          default: val = 0;
+        }
+        res = f32_to_u32(val);
+        break;
+      }
     }
   }
-
   move(ret, term_new(y_type, 0, res));
 }
 
@@ -479,10 +633,10 @@ static void interact_opysup(Loc a_loc, Loc b_loc) {
   set(port(2, cn1), term_new(SUB, 0, 0));
   set(port(1, cn2), term_new(VAR, 0, port(2, dp1)));
   set(port(2, cn2), term_new(SUB, 0, 0));
-  link(term_new(DUP, 0, dp1), arg);
+  link_terms(term_new(DUP, 0, dp1), arg);
   move(ret, term_new(SUP, 0, dp2));
-  link(term_new(OPY, 0, cn1), tm1);
-  link(term_new(OPY, 0, cn2), tm2);
+  link_terms(term_new(OPY, 0, cn1), tm1);
+  link_terms(term_new(OPY, 0, cn2), tm2);
 }
 
 
@@ -516,7 +670,7 @@ static void interact_duplam(Loc a_loc, Loc b_loc) {
   move(dp1, term_new(LAM, 0, co1));
   move(dp2, term_new(LAM, 0, co2));
   move(var, term_new(SUP, 0, du1));
-  link(term_new(DUP, 0, du2), bod);
+  link_terms(term_new(DUP, 0, du2), bod);
 }
 
 static void interact_dupnul(Loc a_loc) {
@@ -541,7 +695,7 @@ static void interact_dupref(Loc a_loc, Loc b_loc) {
 static void interact_matnul(Loc a_loc, Lab mat_len) {
   move(port(1, a_loc), term_new(NUL, 0, 0));
   for (u32 i = 0; i < mat_len; i++) {
-    link(term_new(ERA, 0, 0), take(port(i + 2, a_loc)));
+    link_terms(term_new(ERA, 0, 0), take(port(i + 2, a_loc)));
   }
 }
 
@@ -554,7 +708,7 @@ static void interact_matnum(Loc mat_loc, Lab mat_len, u32 n, Tag n_type) {
   u32 i_arm = (n < mat_len - 1) ? n : (mat_len - 1);
   for (u32 i = 0; i < mat_len; i++) {
     if (i != i_arm) {
-      link(term_new(ERA, 0, 0), take(port(2 + i, mat_loc)));
+      link_terms(term_new(ERA, 0, 0), take(port(2 + i, mat_loc)));
     }
   }
 
@@ -569,7 +723,7 @@ static void interact_matnum(Loc mat_loc, Lab mat_len, u32 n, Tag n_type) {
     set(app + 1, term_new(SUB, 0, 0));
     move(ret, term_new(VAR, 0, port(2, app)));
 
-    link(term_new(APP, 0, app), arm);
+    link_terms(term_new(APP, 0, app), arm);
   }
 }
 
@@ -591,12 +745,12 @@ static void interact_matsup(Loc mat_loc, Lab mat_len, Loc sup_loc) {
     set(port(2 + i, ma0), term_new(VAR, 0, port(2, dui)));
     set(port(2 + i, ma1), term_new(VAR, 0, port(1, dui)));
 
-    link(term_new(DUP, 0, dui), take(port(2 + i, mat_loc)));
+    link_terms(term_new(DUP, 0, dui), take(port(2 + i, mat_loc)));
   }
 
   move(port(1, mat_loc), term_new(SUP, 0, sup));
-  link(term_new(MAT, mat_len, ma0), take(port(2, sup_loc)));
-  link(term_new(MAT, mat_len, ma1), take(port(1, sup_loc)));
+  link_terms(term_new(MAT, mat_len, ma0), take(port(2, sup_loc)));
+  link_terms(term_new(MAT, mat_len, ma1), take(port(1, sup_loc)));
 }
 
 
@@ -604,14 +758,14 @@ static void interact_eralam(Loc b_loc) {
   Loc  var = port(1, b_loc);
   Term bod = take(port(2, b_loc));
   move(var, term_new(NUL, 0, 0));
-  link(term_new(ERA, 0, 0), bod);
+  link_terms(term_new(ERA, 0, 0), bod);
 }
 
 static void interact_erasup(Loc b_loc) {
   Term tm1 = take(port(1, b_loc));
   Term tm2 = take(port(2, b_loc));
-  link(term_new(ERA, 0, 0), tm1);
-  link(term_new(ERA, 0, 0), tm2);
+  link_terms(term_new(ERA, 0, 0), tm1);
+  link_terms(term_new(ERA, 0, 0), tm2);
 }
 
 static char* tag_to_str(Tag tag);
@@ -628,7 +782,7 @@ static void interact(Term neg, Term pos) {
         case LAM: interact_applam(neg_loc, pos_loc); break;
         case NUL: interact_appnul(neg_loc); break;
         case U32: interact_appu32(neg_loc, pos_loc); break;
-        case REF: link(neg, expand_ref(pos_loc)); break;
+        case REF: link_terms(neg, expand_ref(pos_loc)); break;
         case SUP: interact_appsup(neg_loc, pos_loc); break;
       }
       break;
@@ -639,7 +793,7 @@ static void interact(Term neg, Term pos) {
         case U32:
         case I32:
         case F32: interact_opxnum(neg_loc, term_lab(neg), pos_loc, pos_tag); break;
-        case REF: link(neg, expand_ref(pos_loc)); break;
+        case REF: link_terms(neg, expand_ref(pos_loc)); break;
         case SUP: interact_opxsup(neg_loc, term_lab(neg), pos_loc); break;
       }
       break;
@@ -650,7 +804,7 @@ static void interact(Term neg, Term pos) {
         case U32:
         case I32:
         case F32: interact_opynum(neg_loc, term_lab(neg), pos_loc, pos_tag); break;
-        case REF: link(neg, expand_ref(pos_loc)); break;
+        case REF: link_terms(neg, expand_ref(pos_loc)); break;
         case SUP: interact_opysup(neg_loc, pos_loc); break;
       }
       break;
@@ -663,7 +817,7 @@ static void interact(Term neg, Term pos) {
         case F32: interact_dupnum(neg_loc, pos_loc, pos_tag); break;
         // TODO(enricozb): dup-ref optimization
         case REF: interact_dupref(neg_loc, pos_loc); break;
-        // case REF: link(neg, expand_ref(pos_loc)); break;
+        // case REF: link_terms(neg, expand_ref(pos_loc)); break;
         case SUP: interact_dupsup(neg_loc, pos_loc); break;
       }
       break;
@@ -674,7 +828,7 @@ static void interact(Term neg, Term pos) {
         case U32:
         case I32:
         case F32: interact_matnum(neg_loc, term_lab(neg), pos_loc, pos_tag); break;
-        case REF: link(neg, expand_ref(pos_loc)); break;
+        case REF: link_terms(neg, expand_ref(pos_loc)); break;
         case SUP: interact_matsup(neg_loc, term_lab(neg), pos_loc); break;
       }
       break;
@@ -689,6 +843,55 @@ static void interact(Term neg, Term pos) {
       break;
   }
 }
+
+// FIXME:
+void* thread_work(void* arg) {
+    int thread_id = *(int*)arg;
+    
+    while (1) {
+        Loc loc = rbag_pop();
+        
+        if (loc == 0) {
+            break;
+        }
+       
+        Term neg = take(loc + 0);
+        Term pos = take(loc + 1);
+
+        interact(neg, pos);
+        printf("thread %d: interacting loc %u, %u\n", thread_id, loc, loc+1);
+//        printf("");
+    }
+    
+    
+    return NULL;
+}
+
+int parallel_step() {
+    thread_t threads[MAX_THREADS]; 
+
+    int thread_ids[MAX_THREADS];
+
+    for (int i = 0; i < MAX_THREADS; i++) {
+        thread_ids[i] = i;
+        int rc = thread_create(&threads[i], NULL, thread_work, &thread_ids[i]);
+    }
+
+    for(int i = 0; i < MAX_THREADS; i++){
+        thread_join(threads[i], NULL);
+    }
+
+//    Loc loc = rbag_pop();
+
+//    if(loc == 0) {
+//        return 0;
+//    }
+//    Term neg = take(loc + 0);
+//    Term pos = take(loc + 1);
+//    interact(neg, pos);
+    return 1; 
+}
+
 
 // Evaluation
 static inline int normal_step() {
@@ -714,8 +917,10 @@ static inline int normal_step() {
 // FFI exports
 void hvm_init() {
   if (BUFF == NULL) {
-    BUFF = calloc((1ULL << 24), sizeof(a64));
+//    BUFF = malloc((1ULL << 24) * sizeof(a64));
+    BUFF = aligned_alloc(64, (1ULL << 24) * sizeof(a64));  
   }
+  memset(BUFF, 0, (1ULL << 24) * sizeof(a64));
   RNOD_INI = 0;
   RNOD_END = 0;
   RBAG_INI = 0;
