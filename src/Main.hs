@@ -42,15 +42,18 @@ cliRun filePath showStats = do
   main <- case maybeMain of
     Just main -> pure main
     Nothing -> exitWithError "missing 'main' definition"
- 
+
+  -- Only count time for the interactions, not parsing, memory alloc and conversion 
+  -- to a human readable format
   init <- getCPUTime
   term <- normalize main
+  end <- getCPUTime
 
   net <- extractNet term
   putStrLn $ netToString net
 
   when showStats $ do
-    end <- getCPUTime
+    -- end <- getCPUTime
     let time = fromIntegral (end - init) / (10^9) :: Double
     itr <- incItr
     len <- rnodEnd
