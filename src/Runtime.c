@@ -1023,6 +1023,7 @@ void hvm_init() {
   }
   memset(BUFF, 0, (1ULL << 24) * sizeof(a64));
   RNOD_INI = 0;
+
   RNOD_END = 0;
   RBAG_INI = 0;
   RBAG_END = 0;
@@ -1053,9 +1054,9 @@ Term normalize(Term term) {
 
   boot(term_loc(term));
 
-  while (normal_step())
-    ;
-  /*parallel_step();*/
+  /*while (normal_step());*/
+
+  parallel_step();
   return get(0);
 }
 
