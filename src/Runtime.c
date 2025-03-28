@@ -185,11 +185,11 @@ typedef _Atomic(u64) a64;
 
 // Global heap
 static a64* BUFF     = NULL;
-static u64  RNOD_INI = 0;
-static u64  RNOD_END = 0;
-static u64  RBAG     = 0x1000;
-static u64  RBAG_INI = 0;
-static u64  RBAG_END = 0;
+static a64  RNOD_INI = 0;
+static a64  RNOD_END = 0;
+static a64  RBAG     = 0x1000;
+static a64  RBAG_INI = 0;
+static a64  RBAG_END = 0;
 
 // Global book
 typedef struct Def {
