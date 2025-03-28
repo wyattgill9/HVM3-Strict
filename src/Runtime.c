@@ -218,11 +218,7 @@ void dump_buff();
 
 // Term operations
 Term term_new(Tag tag, Lab lab, Loc loc) {
-  Term tag_enc = tag;
-  Term lab_enc = ((Term)lab) << 8;
-  Term loc_enc = ((Term)loc) << 32;
-
-  return loc_enc | lab_enc | tag_enc;
+  return ((Term)loc << 32) | ((Term)lab << 8) | tag; 
 }
 
 Tag term_tag(Term term) {
@@ -953,7 +949,7 @@ Term normalize(Term term) {
   boot(term_loc(term));
 
   while (normal_step());
-
+  /*parallel_step();*/
   return get(0);
 }
 
