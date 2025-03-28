@@ -117,9 +117,9 @@ int thread_join(pthread_t thread, void **retval) {
 
 #endif
 
-//#define MAX_THREADS get_num_threads()
+#define MAX_THREADS get_num_threads()
 
-int MAX_THREADS = 2;
+// int MAX_THREADS = 1;
 
 typedef uint8_t Tag;   //  8 bits
 typedef uint32_t Lab;  // 24 bits
@@ -1077,9 +1077,9 @@ Term normalize(Term term) {
 
   boot(term_loc(term));
 
-  /*while (normal_step());*/
+  while (normal_step());
 
-  parallel_step();
+  /*parallel_step();*/
   printf("MAX_THREADS: %u\n", MAX_THREADS);
   return get(0);
 }
