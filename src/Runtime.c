@@ -122,9 +122,9 @@ int thread_join(pthread_t thread, void **retval) {
 
 #endif
 
-#define MAX_THREADS get_num_threads()
+/*#define MAX_THREADS get_num_threads()*/ // uncomment for multi-threading
 
-// int MAX_THREADS = 1;
+int MAX_THREADS = 1;
 
 typedef uint8_t Tag;   //  8 bits
 typedef uint32_t Lab;  // 24 bits
@@ -991,7 +991,7 @@ void *thread_work(void *arg) {
     Term pos = take(loc + 1);
 
     interact(neg, pos);
-    printf("thread %d: interacting loc %u, %u\n", thread_id, loc, loc + 1);
+    /*printf("thread %d: interacting loc %u, %u\n", thread_id, loc, loc + 1);*/
     //        printf("");
   }
 
@@ -1084,11 +1084,10 @@ Term normalize(Term term) {
 
   boot(term_loc(term));
 
-  while (normal_step())
-    ;
+  /*while (normal_step());*/
 
-  /*parallel_step();*/
-  printf("MAX_THREADS: %u\n", MAX_THREADS);
+  parallel_step();
+  /*printf("MAX_THREADS: %u\n", MAX_THREADS);*/
   return get(0);
 }
 
