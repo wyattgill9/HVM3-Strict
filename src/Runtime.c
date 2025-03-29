@@ -92,9 +92,9 @@ int thread_join(pthread_t thread, void **retval) {
 
 #endif
 
-// #define MAX_THREADS get_num_threads() // uncomment for multi-threading
+#define MAX_THREADS get_num_threads() // uncomment for multi-threading
 
-int MAX_THREADS = 1;
+// int MAX_THREADS = 1;
 
 typedef uint8_t Tag;   //  8 bits
 typedef uint32_t Lab;  // 24 bits
@@ -240,9 +240,8 @@ Loc rbag_push(Term neg, Term pos) {
   Loc loc = RBAG + current_end;
 
   // Set the negative and positive terms
-  // Note: set() is assumed to be a thread-safe term setting function
-  set(loc + 0, neg);
-  set(loc + 1, pos);
+  atomic_store_explicit(&BUFF[loc + 0], neg, memory_order_release);
+  atomic_store_explicit(&BUFF[loc + 1], pos, memory_order_release);
 
   // Return the location of the newly pushed pair
   return loc;
@@ -252,16 +251,17 @@ Loc rbag_pop() {
   // Use atomic fetch_add to increment RBAG_INI atomically
   // This ensures thread-safe access to the reduction bag
   u64 current_ini = atomic_fetch_add(&RBAG_INI, 2);
+  u64 current_end = atomic_load_explicit(&RBAG_END, memory_order_acquire);
 
   // Check if we've reached or exceeded the end of the reduction bag
-  if (current_ini < atomic_load(&RBAG_END)) {
-    // Calculate and return the location
-    // current_ini represents the starting index of the location pair
-    return RBAG + current_ini;
+  if (current_ini >= current_end) {
+    // If we've exhausted the reduction bag, return 0
+    return 0;
   }
 
-  // If we've exhausted the reduction bag, return 0
-  return 0;
+  // Calculate and return the location
+  // current_ini represents the starting index of the location pair
+  return RBAG + current_ini;
 }
 
 Loc rbag_ini() {
