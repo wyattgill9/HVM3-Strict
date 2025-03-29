@@ -69,36 +69,6 @@ int thread_join(HANDLE thread, void **retval) {
   return 0;
 }
 
-#elif defined(Macintosh) || defined(__APPLE__) || defined(__MACH__) ||         \
-    defined(macintosh)
-
-#include <pthread.h>
-#include <sys/sysctl.h>
-
-typedef pthread_t thread_t;
-
-int get_num_threads() {
-  int nm[2] = {CTL_HW, HW_AVAILCPU};
-  int count;
-  size_t len = sizeof(count);
-
-  if (sysctl(nm, 2, &count, &len, NULL, 0) || count < 1) {
-    nm[1] = HW_NCPU;
-    if (sysctl(nm, 2, &count, &len, NULL, 0) || count < 1)
-      count = 1;
-  }
-  return count;
-}
-
-int thread_create(pthread_t *thread, const pthread_attr_t *attr,
-                  void *(*start_routine)(void *), void *arg) {
-  return pthread_create(thread, attr, start_routine, arg);
-}
-
-int thread_join(pthread_t thread, void **retval) {
-  return pthread_join(thread, retval);
-}
-
 #else
 
 #include <pthread.h>
@@ -122,9 +92,9 @@ int thread_join(pthread_t thread, void **retval) {
 
 #endif
 
-#define MAX_THREADS get_num_threads() // uncomment for multi-threading
+// #define MAX_THREADS get_num_threads() // uncomment for multi-threading
 
-/*int MAX_THREADS = 1;*/
+int MAX_THREADS = 1;
 
 typedef uint8_t Tag;   //  8 bits
 typedef uint32_t Lab;  // 24 bits
@@ -992,11 +962,12 @@ void *thread_work(void *arg) {
 
     interact(neg, pos);
     /*printf("thread %d: interacting loc %u, %u\n", thread_id, loc, loc + 1);*/
-    //        printf("");
   }
 
   return NULL;
 }
+
+static inline int normal_step();
 
 int parallel_step() {
   thread_t threads[MAX_THREADS];
@@ -1011,21 +982,11 @@ int parallel_step() {
   for (int i = 0; i < MAX_THREADS; i++) {
     thread_join(threads[i], NULL);
   }
-
-  //    Loc loc = rbag_pop();
-
-  //    if(loc == 0) {
-  //        return 0;
-  //    }
-  //    Term neg = take(loc + 0);
-  //    Term pos = take(loc + 1);
-  //    interact(neg, pos);
   return 1;
 }
 
 // Evaluation
 static inline int normal_step() {
-  // dump_buff();
 
   Loc loc = rbag_pop();
   if (loc == 0) {
@@ -1084,11 +1045,11 @@ Term normalize(Term term) {
 
   boot(term_loc(term));
 
-  // while (normal_step());
+  /*while (normal_step());*/
 
   parallel_step();
   /*printf("MAX_THREADS: %u\n", MAX_THREADS);*/
-  dump_buff();
+  /*dump_buff();*/
  
   return get(0);
 }
@@ -1134,70 +1095,68 @@ static char *tag_to_str(Tag tag) {
   }
 }
 
-void dump_buff() {
-  FILE *file = fopen("multi.txt", "w");
-  if (file == NULL) {
-    perror("Error opening file");
-    return;
-  }
-
-  fprintf(file, "------------------\n");
-  fprintf(file, "      NODES\n");
-  fprintf(file, "ADDR   LOC LAB TAG\n");
-  fprintf(file, "------------------\n");
-  for (Loc loc = RNOD_INI; loc < RNOD_END; loc++) {
-    Term term = get(loc);
-    Loc t_loc = term_loc(term);
-    Lab t_lab = term_lab(term);
-    Tag t_tag = term_tag(term);
-    fprintf(file, "%06X %03X %03X %s\n", loc, term_loc(term), term_lab(term),
-            tag_to_str(term_tag(term)));
-  }
-
-  fprintf(file, "------------------\n");
-  fprintf(file, "    REDEX BAG\n");
-  fprintf(file, "ADDR   LOC LAB TAG\n");
-  fprintf(file, "------------------\n");
-  for (Loc loc = RBAG + RBAG_INI; loc < RBAG + RBAG_END; loc++) {
-    Term term = get(loc);
-    Loc t_loc = term_loc(term);
-    Lab t_lab = term_lab(term);
-    Tag t_tag = term_tag(term);
-    fprintf(file, "%06X %03X %03X %s\n", loc, term_loc(term), term_lab(term),
-            tag_to_str(term_tag(term)));
-  }
-
-  fprintf(file, "------------------\n");
-
-  fclose(file);
-}
-
-
-/**/
 /*void dump_buff() {*/
-/*  printf("------------------\n");*/
-/*  printf("      NODES\n");*/
-/*  printf("ADDR   LOC LAB TAG\n");*/
-/*  printf("------------------\n");*/
+/*  FILE *file = fopen("multi.txt", "w");*/
+/*  if (file == NULL) {*/
+/*    perror("Error opening file");*/
+/*    return;*/
+/*  }*/
+/**/
+/*  fprintf(file, "------------------\n");*/
+/*  fprintf(file, "      NODES\n");*/
+/*  fprintf(file, "ADDR   LOC LAB TAG\n");*/
+/*  fprintf(file, "------------------\n");*/
 /*  for (Loc loc = RNOD_INI; loc < RNOD_END; loc++) {*/
 /*    Term term = get(loc);*/
 /*    Loc t_loc = term_loc(term);*/
 /*    Lab t_lab = term_lab(term);*/
 /*    Tag t_tag = term_tag(term);*/
-/*    printf("%06X %03X %03X %s\n", loc, term_loc(term), term_lab(term),*/
-/*           tag_to_str(term_tag(term)));*/
+/*    fprintf(file, "%06X %03X %03X %s\n", loc, term_loc(term), term_lab(term),*/
+/*            tag_to_str(term_tag(term)));*/
 /*  }*/
-/*  printf("------------------\n");*/
-/*  printf("    REDEX BAG\n");*/
-/*  printf("ADDR   LOC LAB TAG\n");*/
-/*  printf("------------------\n");*/
+/**/
+/*  fprintf(file, "------------------\n");*/
+/*  fprintf(file, "    REDEX BAG\n");*/
+/*  fprintf(file, "ADDR   LOC LAB TAG\n");*/
+/*  fprintf(file, "------------------\n");*/
 /*  for (Loc loc = RBAG + RBAG_INI; loc < RBAG + RBAG_END; loc++) {*/
 /*    Term term = get(loc);*/
 /*    Loc t_loc = term_loc(term);*/
 /*    Lab t_lab = term_lab(term);*/
 /*    Tag t_tag = term_tag(term);*/
-/*    printf("%06X %03X %03X %s\n", loc, term_loc(term), term_lab(term),*/
-/*           tag_to_str(term_tag(term)));*/
+/*    fprintf(file, "%06X %03X %03X %s\n", loc, term_loc(term), term_lab(term),*/
+/*            tag_to_str(term_tag(term)));*/
 /*  }*/
-/*  printf("------------------\n");*/
+/**/
+/*  fprintf(file, "------------------\n");*/
+/**/
+/*  fclose(file);*/
 /*}*/
+
+void dump_buff() {
+  printf("------------------\n");
+  printf("      NODES\n");
+  printf("ADDR   LOC LAB TAG\n");
+  printf("------------------\n");
+  for (Loc loc = RNOD_INI; loc < RNOD_END; loc++) {
+    Term term = get(loc);
+    Loc t_loc = term_loc(term);
+    Lab t_lab = term_lab(term);
+    Tag t_tag = term_tag(term);
+    printf("%06X %03X %03X %s\n", loc, term_loc(term), term_lab(term),
+           tag_to_str(term_tag(term)));
+  }
+  printf("------------------\n");
+  printf("    REDEX BAG\n");
+  printf("ADDR   LOC LAB TAG\n");
+  printf("------------------\n");
+  for (Loc loc = RBAG + RBAG_INI; loc < RBAG + RBAG_END; loc++) {
+    Term term = get(loc);
+    Loc t_loc = term_loc(term);
+    Lab t_lab = term_lab(term);
+    Tag t_tag = term_tag(term);
+    printf("%06X %03X %03X %s\n", loc, term_loc(term), term_lab(term),
+           tag_to_str(term_tag(term)));
+  }
+  printf("------------------\n");
+}

@@ -31,6 +31,6 @@ executable hvms
         extra-lib-dirs:  
         cc-options: -O3 -march=znver3 
     else 
-        cc-options:  -O3 -Wall
+        cc-options:  -O3
     extra-libraries:  c
     ghc-options:     -Wno-all
