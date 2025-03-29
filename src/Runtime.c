@@ -1,4 +1,4 @@
-// HVM3 Core: single-thread, polarized, LAM/APP & DUP/SUP only
+// HVM2 Core: single-thread, polarized, LAM/APP & DUP/SUP only
 
 #include <stdatomic.h>
 #include <stddef.h>
@@ -1084,9 +1084,9 @@ Term normalize(Term term) {
 
   boot(term_loc(term));
 
-  while (normal_step());
+  // while (normal_step());
 
-  /*parallel_step();*/
+  parallel_step();
   /*printf("MAX_THREADS: %u\n", MAX_THREADS);*/
   dump_buff();
  
