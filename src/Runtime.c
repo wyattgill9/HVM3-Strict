@@ -92,9 +92,9 @@ int thread_join(pthread_t thread, void **retval) {
 
 #endif
 
-#define MAX_THREADS get_num_threads() // uncomment for multi-threading
+/*#define MAX_THREADS get_num_threads() // uncomment for multi-threading*/
 
-// int MAX_THREADS = 1;
+int MAX_THREADS = 1;
 
 typedef uint8_t Tag;   //  8 bits
 typedef uint32_t Lab;  // 24 bits
@@ -150,7 +150,7 @@ typedef _Atomic(u64) a64;
 static a64 *BUFF = NULL;
 static a64 RNOD_INI = 0;
 static a64 RNOD_END = 0;
-static a64 RBAG = 0x1000;
+static a64 RBAG = 0x1000000;
 static a64 RBAG_INI = 0;
 static a64 RBAG_END = 0;
 
@@ -1010,7 +1010,7 @@ static inline int normal_step() {
 void hvm_init() {
   if (BUFF == NULL) {
     //    BUFF = malloc((1ULL << 24) * sizeof(a64));
-    BUFF = aligned_alloc(64, (1ULL << 24) * sizeof(a64));
+    BUFF = aligned_alloc(64, (1ULL << 26) * sizeof(a64));
   }
   memset(BUFF, 0, (1ULL << 24) * sizeof(a64));
 
