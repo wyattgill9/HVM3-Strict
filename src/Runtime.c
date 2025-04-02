@@ -92,9 +92,9 @@ int thread_join(pthread_t thread, void **retval) {
 
 #endif
 
-/*#define MAX_THREADS get_num_threads() // uncomment for multi-threading*/
+#define MAX_THREADS get_num_threads() // uncomment for multi-threading
 
-int MAX_THREADS = 1;
+/*int MAX_THREADS = 1; // uncomment for testing*/
 
 typedef uint8_t Tag;   //  8 bits
 typedef uint32_t Lab;  // 24 bits
@@ -946,45 +946,6 @@ static void interact(Term neg, Term pos) {
   }
 }
 
-// FIXME:
-void *thread_work(void *arg) {
-  int thread_id = *(int *)arg;
-
-  while (1) {
-    Loc loc = rbag_pop();
-
-    if (loc == 0) {
-      break;
-    }
-
-    Term neg = take(loc + 0);
-    Term pos = take(loc + 1);
-
-    interact(neg, pos);
-    /*printf("thread %d: interacting loc %u, %u\n", thread_id, loc, loc + 1);*/
-  }
-
-  return NULL;
-}
-
-static inline int normal_step();
-
-int parallel_step() {
-  thread_t threads[MAX_THREADS];
-
-  int thread_ids[MAX_THREADS];
-
-  for (int i = 0; i < MAX_THREADS; i++) {
-    thread_ids[i] = i;
-    int rc = thread_create(&threads[i], NULL, thread_work, &thread_ids[i]);
-  }
-
-  for (int i = 0; i < MAX_THREADS; i++) {
-    thread_join(threads[i], NULL);
-  }
-  return 1;
-}
-
 // Evaluation
 static inline int normal_step() {
 
@@ -1045,12 +1006,12 @@ Term normalize(Term term) {
 
   boot(term_loc(term));
 
-  /*while (normal_step());*/
+  while (normal_step())
+    ;
 
-  parallel_step();
-  /*printf("MAX_THREADS: %u\n", MAX_THREADS);*/
+  printf("MAX_THREADS: %u\n", MAX_THREADS);
   /*dump_buff();*/
- 
+
   return get(0);
 }
 
@@ -1111,7 +1072,8 @@ static char *tag_to_str(Tag tag) {
 /*    Loc t_loc = term_loc(term);*/
 /*    Lab t_lab = term_lab(term);*/
 /*    Tag t_tag = term_tag(term);*/
-/*    fprintf(file, "%06X %03X %03X %s\n", loc, term_loc(term), term_lab(term),*/
+/*    fprintf(file, "%06X %03X %03X %s\n", loc, term_loc(term),
+ * term_lab(term),*/
 /*            tag_to_str(term_tag(term)));*/
 /*  }*/
 /**/
@@ -1124,7 +1086,8 @@ static char *tag_to_str(Tag tag) {
 /*    Loc t_loc = term_loc(term);*/
 /*    Lab t_lab = term_lab(term);*/
 /*    Tag t_tag = term_tag(term);*/
-/*    fprintf(file, "%06X %03X %03X %s\n", loc, term_loc(term), term_lab(term),*/
+/*    fprintf(file, "%06X %03X %03X %s\n", loc, term_loc(term),
+ * term_lab(term),*/
 /*            tag_to_str(term_tag(term)));*/
 /*  }*/
 /**/
