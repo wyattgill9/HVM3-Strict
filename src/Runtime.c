@@ -994,13 +994,15 @@ static inline int normal_step() {
   return 1;
 }
 
-// FFI exports
 void hvm_init() {
   if (BUFF == NULL) {
-    //    BUFF = malloc((1ULL << 24) * sizeof(a64));
     BUFF = aligned_alloc(64, (1ULL << 26) * sizeof(a64));
+    if (BUFF == NULL) {
+      fprintf(stderr, "Memory allocation failed\n");
+      exit(EXIT_FAILURE);
+    }
   }
-  memset(BUFF, 0, (1ULL << 24) * sizeof(a64));
+  memset(BUFF, 0, (1ULL << 26) * sizeof(a64)); // FIXED ALLOCATION
 
   atomic_store(&RNOD_INI, 0);
   atomic_store(&RNOD_END, 0);
