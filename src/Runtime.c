@@ -973,26 +973,19 @@ static void interact(Term neg, Term pos) {
   }
 }
 
-// Evaluation
-static inline int normal_step() {
 
-  Loc loc = rbag_pop();
-  if (loc == 0) {
-    // dump_buff();
+static inline int thread_work() {
+    Loc loc = rbag_pop();
+   
+    if(loc == 0) { return 0; }
 
-    return 0;
-  }
+    Term neg = take(loc);
+    Term pos = take(loc + 1);
+    interact(neg, pos);
 
-  Term neg = take(loc + 0);
-  Term pos = take(loc + 1);
-
-  // printf("\n\n%04lX: INTERACT %s ~ %s\n\n", inc_itr(), tag_to_str(neg),
-  // tag_to_str(pos));
-
-  interact(neg, pos);
-
-  return 1;
+    return 1;
 }
+    
 
 void hvm_init() {
   if (BUFF == NULL) {
@@ -1035,12 +1028,10 @@ Term normalize(Term term) {
 
   boot(term_loc(term));
 
-  while (normal_step())
-    ;
-
-  printf("MAX_THREADS: %u\n", MAX_THREADS);
-  /*dump_buff();*/
-
+  while (thread_work());  
+  
+  /*printf("MAX_THREADS: %u\n", MAX_THREADS);*/
+  
   return get(0);
 }
 
