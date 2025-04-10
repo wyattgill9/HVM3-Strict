@@ -1031,9 +1031,7 @@ Term normalize(Term term) {
   boot(term_loc(term));
 
   while (thread_work());  
-  
-  /*printf("MAX_THREADS: %u\n", MAX_THREADS);*/
-  
+
   return get(0);
 }
 
@@ -1078,6 +1076,7 @@ static char *tag_to_str(Tag tag) {
   }
 }
 
+// FILE VERSION: (or you can >> the stdio into a file)
 /*void dump_buff() {*/
 /*  FILE *file = fopen("multi.txt", "w");*/
 /*  if (file == NULL) {*/
@@ -1117,7 +1116,7 @@ static char *tag_to_str(Tag tag) {
 /**/
 /*  fclose(file);*/
 /*}*/
-
+// STD VERSION
 void dump_buff() {
   printf("------------------\n");
   printf("      NODES\n");
