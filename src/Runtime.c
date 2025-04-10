@@ -1,4 +1,4 @@
-// HVM2 Core: single-thread, polarized, LAM/APP & DUP/SUP only
+// HVM3-Strict Core: single-thread, polarized, LAM/APP & DUP/SUP only
 
 #include <stdatomic.h>
 #include <stddef.h>
@@ -145,6 +145,8 @@ const Term VOID = 0;
 // Types
 typedef uint64_t u64;
 typedef _Atomic(u64) a64;
+
+typedef unsigned __int128 u128 __attribute__((aligned(16))); // NOTE gcc/clang specific
 
 // Using union for type punning (safer in C)
 typedef union {
