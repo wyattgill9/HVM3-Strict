@@ -5,7 +5,7 @@ import Extract
 import Inject
 import Parse
 import Show
-import System.CPUTime
+import System.Clock
 import System.Environment (getArgs)
 import System.Exit (exitWith, ExitCode(ExitSuccess, ExitFailure))
 import System.IO (readFile, print)
@@ -45,21 +45,21 @@ cliRun filePath showStats = do
 
   -- Only count time for the interactions, not parsing, memory alloc and conversion 
   -- to a human readable format
-  init <- getCPUTime
-  term <- normalize main
-  end <- getCPUTime
+  start <- getTime Monotonic
+  term <- Type.normalize main
+  end <- getTime Monotonic
 
   net <- extractNet term
   putStrLn $ netToString net
 
   when showStats $ do
     -- end <- getCPUTime
-    let time = fromIntegral (end - init) / (10^9) :: Double
+    let timeInMs = fromIntegral (toNanoSecs (diffTimeSpec end start)) / 1000000 :: Double
     itr <- incItr
     len <- rnodEnd
-    let mips = (fromIntegral itr / 1000000.0) / (((time))/ 1000.0)
+    let mips = (fromIntegral itr / 1000000.0) / (((timeInMs))/ 1000.0)
     putStrLn $ "ITRS: " ++ show itr
-    putStrLn $ "TIME: " ++ show time ++ "ms"
+    putStrLn $ "TIME: " ++ show timeInMs ++ "ms"
     putStrLn $ "SIZE: " ++ show len
     putStrLn $ "MIPS: " ++ show mips
 
