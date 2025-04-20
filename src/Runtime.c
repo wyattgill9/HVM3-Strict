@@ -146,13 +146,14 @@ const Term VOID = 0;
 typedef uint64_t u64;
 typedef _Atomic(u64) a64;
 
-typedef unsigned __int128 u128 __attribute__((aligned(16))); // NOTE gcc/clang specific
+typedef unsigned __int128 u128
+    __attribute__((aligned(16))); // NOTE gcc/clang specific
 
 // Using union for type punning (safer in C)
 typedef union {
-    u32 u;
-    i32 i;
-    f32 f;
+  u32 u;
+  i32 i;
+  f32 f;
 } TypeConverter;
 
 // Global heap
@@ -353,9 +354,9 @@ Term expand_ref(Loc def_idx) {
 
   Term root = term_offset_loc(nodes[0], offset);
 
-  // Unroll loop, better branch prediction
+  // // Unroll loop, better branch prediction
   u32 i = 1;
-  for (; i + 7 < nodes_len; i += 8) {
+  for (; i + 2 < nodes_len; i += 3) {
     set(i + offset, term_offset_loc(nodes[i], offset));
     set(i + offset + 1, term_offset_loc(nodes[i + 1], offset));
     set(i + offset + 2, term_offset_loc(nodes[i + 2], offset));
@@ -492,30 +493,30 @@ static void interact_opynul(Loc a_loc) {
 }
 
 // Safer Utilities
-u32 u32_to_u32(u32 u) { return u; }  
+u32 u32_to_u32(u32 u) { return u; }
 
-i32 u32_to_i32(u32 u) { 
-    TypeConverter converter;
-    converter.u = u;
-    return converter.i;
+i32 u32_to_i32(u32 u) {
+  TypeConverter converter;
+  converter.u = u;
+  return converter.i;
 }
 
 f32 u32_to_f32(u32 u) {
-    TypeConverter converter;
-    converter.u = u;
-    return converter.f;
+  TypeConverter converter;
+  converter.u = u;
+  return converter.f;
 }
 
 u32 i32_to_u32(i32 i) {
-    TypeConverter converter;
-    converter.i = i;
-    return converter.u;
+  TypeConverter converter;
+  converter.i = i;
+  return converter.u;
 }
 
 u32 f32_to_u32(f32 f) {
-    TypeConverter converter;
-    converter.f = f;
-    return converter.u;
+  TypeConverter converter;
+  converter.f = f;
+  return converter.u;
 }
 
 static void interact_opynum(Loc a_loc, Lab op, u32 y, Tag y_type) {
@@ -975,19 +976,19 @@ static void interact(Term neg, Term pos) {
   }
 }
 
-
 static inline int thread_work() {
-    Loc loc = rbag_pop();
-   
-    if(loc == 0) { return 0; }
+  Loc loc = rbag_pop();
 
-    Term neg = take(loc);
-    Term pos = take(loc + 1);
-    interact(neg, pos);
+  if (loc == 0) {
+    return 0;
+  }
 
-    return 1;
+  Term neg = take(loc);
+  Term pos = take(loc + 1);
+  interact(neg, pos);
+
+  return 1;
 }
-    
 
 void hvm_init() {
   if (BUFF == NULL) {
@@ -1030,7 +1031,8 @@ Term normalize(Term term) {
 
   boot(term_loc(term));
 
-  while (thread_work());  
+  while (thread_work())
+    ;
 
   return get(0);
 }
