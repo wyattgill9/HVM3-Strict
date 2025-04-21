@@ -393,12 +393,6 @@ Term expand_ref(Loc def_idx) {
   }
   
   if (rbag_len > 0) {
-    if (rbag_len <= 64) {
-      for (u32 i = 0; i < rbag_len; i += 2) {
-        rbag_push(term_offset_loc(rbag[i], offset), 
-                  term_offset_loc(rbag[i + 1], offset));
-      }
-    } else {
       #define RBAG_STACK_SIZE 128
       Term rbag_stack[RBAG_STACK_SIZE];
       Term *rbag_entries = (rbag_len <= RBAG_STACK_SIZE) ? 
@@ -425,7 +419,6 @@ Term expand_ref(Loc def_idx) {
         free(rbag_entries);
       }
     }
-  }
 
   return root;
 }
