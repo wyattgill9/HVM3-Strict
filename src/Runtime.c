@@ -365,21 +365,23 @@ Term expand_ref(Loc def_idx) {
       atomic_store(&BUFF[offset + i], term_offset_loc(nodes[i], offset));
     }
   } else {
-    // Larger nodes array - use stack buffer
-    #define STACK_BUFFER_SIZE 1024
+// Larger nodes array - use stack buffer
+#define STACK_BUFFER_SIZE 1024
     Term stack_buffer[STACK_BUFFER_SIZE];
-    
+
     // Process nodes in chunks for better cache efficiency
     const u32 CHUNK_SIZE = 64; // Align to typical cache line size
-    
-    for (u32 chunk_start = 1; chunk_start < nodes_len; chunk_start += CHUNK_SIZE) {
-      u32 chunk_end = (chunk_start + CHUNK_SIZE < nodes_len) ? 
-                      chunk_start + CHUNK_SIZE : nodes_len;
-      
+
+    for (u32 chunk_start = 1; chunk_start < nodes_len;
+         chunk_start += CHUNK_SIZE) {
+      u32 chunk_end = (chunk_start + CHUNK_SIZE < nodes_len)
+                          ? chunk_start + CHUNK_SIZE
+                          : nodes_len;
+
       if (chunk_end < nodes_len) {
         __builtin_prefetch(&nodes[chunk_end], 0, 0);
       }
-      
+
       // Process current chunk
       for (u32 i = chunk_start; i < chunk_end; i++) {
         Term offset_term = term_offset_loc(nodes[i], offset);
@@ -388,16 +390,18 @@ Term expand_ref(Loc def_idx) {
       }
     }
   }
-  
-  // Process reference bag (always non-empty)
-  #define RBAG_STACK_SIZE 128
+
+// Process reference bag (always non-empty)
+#define RBAG_STACK_SIZE 128
   Term rbag_stack[RBAG_STACK_SIZE];
-  
+
   // Process reference bag in smaller batches to fit in stack
-  for (u32 batch_start = 0; batch_start < rbag_len; batch_start += RBAG_STACK_SIZE) {
-    u32 batch_size = (batch_start + RBAG_STACK_SIZE < rbag_len) ? 
-                      RBAG_STACK_SIZE : (rbag_len - batch_start);
-    
+  for (u32 batch_start = 0; batch_start < rbag_len;
+       batch_start += RBAG_STACK_SIZE) {
+    u32 batch_size = (batch_start + RBAG_STACK_SIZE < rbag_len)
+                         ? RBAG_STACK_SIZE
+                         : (rbag_len - batch_start);
+
     // Prepare batch of rbag entries
     for (u32 i = 0; i < batch_size; i++) {
       u32 idx = batch_start + i;
@@ -406,17 +410,17 @@ Term expand_ref(Loc def_idx) {
       }
       rbag_stack[i] = term_offset_loc(rbag[idx], offset);
     }
-    
+
     // Push pairs to rbag
     for (u32 i = 0; i < batch_size; i += 2) {
-      if (batch_start + i + 1 < rbag_len) {  // Make sure we have a pair
-        rbag_push(rbag_stack[i], rbag_stack[i+1]);
+      if (batch_start + i + 1 < rbag_len) { // Make sure we have a pair
+        rbag_push(rbag_stack[i], rbag_stack[i + 1]);
       }
     }
   }
-  
+
   return root;
-}// Atomic Linker
+} // Atomic Linker
 static inline void move(Loc neg_loc, u64 pos);
 
 static inline void link_terms(Term neg, Term pos) {
