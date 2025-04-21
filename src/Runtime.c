@@ -338,6 +338,7 @@ char *def_name(Loc def_idx) { return BOOK.defs[def_idx].name; }
 // offset by the index where in the BUFF it was expanded.
 //
 // Returns the ref's root, the first node in its data.
+
 Term expand_ref(Loc def_idx) {
   if (RNOD_END == 0) {
     printf("expand_ref: empty BUFF\n");
@@ -354,36 +355,19 @@ Term expand_ref(Loc def_idx) {
 
   Term root = term_offset_loc(nodes[0], offset);
 
-  u32 i = 1;
-  // #pragma unroll
-  for (; i + 7 < nodes_len; i += 8) {
-    Term terms[8];
-    terms[0] = term_offset_loc(nodes[i], offset);
-    terms[1] = term_offset_loc(nodes[i + 1], offset);
-    terms[2] = term_offset_loc(nodes[i + 2], offset);
-    terms[3] = term_offset_loc(nodes[i + 3], offset);
-    terms[4] = term_offset_loc(nodes[i + 4], offset);
-    terms[5] = term_offset_loc(nodes[i + 5], offset);
-    terms[6] = term_offset_loc(nodes[i + 6], offset);
-    terms[7] = term_offset_loc(nodes[i + 7], offset);
-
-    // Batch setting the terms, reducing atomic store calls
-    set(i + offset, terms[0]);
-    set(i + offset + 1, terms[1]);
-    set(i + offset + 2, terms[2]);
-    set(i + offset + 3, terms[3]);
-    set(i + offset + 4, terms[4]);
-    set(i + offset + 5, terms[5]);
-    set(i + offset + 6, terms[6]);
-    set(i + offset + 7, terms[7]);
-  } 
-
-  // Remaining nodes
-  for (; i < nodes_len; i++) {
-    set(i + offset, term_offset_loc(nodes[i], offset));
+  Term *offset_terms = malloc(sizeof(Term) * (nodes_len - 1));
+  if (!offset_terms) {
+    printf("expand_ref: failed to allocate memory\n");
+    exit(1);
   }
+#pragma unroll  
+  for (u32 i = 1; i < nodes_len; i++) {
+    offset_terms[i-1] = term_offset_loc(nodes[i], offset);
+  }
+  
+  memcpy(&BUFF[offset + 1], offset_terms, sizeof(Term) * (nodes_len - 1));
+  free(offset_terms);
 
-  // Redexes in batches of 2 (already aligned)
   for (u32 i = 0; i < rbag_len; i += 2) {
     rbag_push(term_offset_loc(rbag[i], offset),
               term_offset_loc(rbag[i + 1], offset));
