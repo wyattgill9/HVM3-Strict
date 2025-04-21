@@ -355,22 +355,76 @@ Term expand_ref(Loc def_idx) {
 
   Term root = term_offset_loc(nodes[0], offset);
 
-  Term *offset_terms = malloc(sizeof(Term) * (nodes_len - 1));
-  if (!offset_terms) {
-    printf("expand_ref: failed to allocate memory\n");
-    exit(1);
-  }
-#pragma unroll  
-  for (u32 i = 1; i < nodes_len; i++) {
-    offset_terms[i-1] = term_offset_loc(nodes[i], offset);
+  if (nodes_len <= 32) {
+    for (u32 i = 1; i < nodes_len; i++) {
+      BUFF[offset + i] = term_offset_loc(nodes[i], offset);
+    }
+  } else {
+    #define STACK_BUFFER_SIZE 1024
+    Term stack_buffer[STACK_BUFFER_SIZE];
+    Term *offset_terms = (nodes_len - 1 <= STACK_BUFFER_SIZE) ? 
+                          stack_buffer : 
+                          malloc(sizeof(Term) * (nodes_len - 1));
+    
+    if (nodes_len - 1 > STACK_BUFFER_SIZE && !offset_terms) {
+      printf("expand_ref: failed to allocate memory\n");
+      exit(1);
+    }
+    
+    const u32 CHUNK_SIZE = 64; // Align to typical cache line size
+    for (u32 chunk_start = 1; chunk_start < nodes_len; chunk_start += CHUNK_SIZE) {
+      u32 chunk_end = (chunk_start + CHUNK_SIZE < nodes_len) ? 
+                      chunk_start + CHUNK_SIZE : nodes_len;
+      
+      if (chunk_end < nodes_len) {
+        __builtin_prefetch(&nodes[chunk_end], 0, 0);
+      }
+      
+      for (u32 i = chunk_start; i < chunk_end; i++) {
+        offset_terms[i-1] = term_offset_loc(nodes[i], offset);
+      }
+    }
+    
+    memcpy(&BUFF[offset + 1], offset_terms, sizeof(Term) * (nodes_len - 1));
+    
+    if (nodes_len - 1 > STACK_BUFFER_SIZE) {
+      free(offset_terms);
+    }
   }
   
-  memcpy(&BUFF[offset + 1], offset_terms, sizeof(Term) * (nodes_len - 1));
-  free(offset_terms);
-
-  for (u32 i = 0; i < rbag_len; i += 2) {
-    rbag_push(term_offset_loc(rbag[i], offset),
-              term_offset_loc(rbag[i + 1], offset));
+  if (rbag_len > 0) {
+    if (rbag_len <= 64) {
+      for (u32 i = 0; i < rbag_len; i += 2) {
+        rbag_push(term_offset_loc(rbag[i], offset), 
+                  term_offset_loc(rbag[i + 1], offset));
+      }
+    } else {
+      #define RBAG_STACK_SIZE 128
+      Term rbag_stack[RBAG_STACK_SIZE];
+      Term *rbag_entries = (rbag_len <= RBAG_STACK_SIZE) ? 
+                            rbag_stack : 
+                            malloc(sizeof(Term) * rbag_len);
+      
+      if (rbag_len > RBAG_STACK_SIZE && !rbag_entries) {
+        printf("expand_ref: failed to allocate memory for rbag\n");
+        exit(1);
+      }
+      
+      for (u32 i = 0; i < rbag_len; i++) {
+        if (i + 16 < rbag_len) {
+          __builtin_prefetch(&rbag[i + 16], 0, 0);
+        }
+        rbag_entries[i] = term_offset_loc(rbag[i], offset);
+      }
+      
+      for (u32 i = 0; i < rbag_len; i += 2) {
+        rbag_push(rbag_entries[i], rbag_entries[i+1]);
+      }
+      
+      if (rbag_len > RBAG_STACK_SIZE) {
+        free(rbag_entries);
+      }
+    }
   }
 
   return root;
