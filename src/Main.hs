@@ -49,22 +49,18 @@ cliRun filePath showStats = do
   term <- Type.normalize main
   end <- getTime Monotonic
     
-  startExtract <- getTime Monotonic
   net <- extractNet term
-  endExtract <- getTime Monotonic
 
   putStrLn $ netToString net
 
   when showStats $ do
     -- end <- getCPUTime
     let timeInMs = fromIntegral (toNanoSecs (diffTimeSpec end start)) / 1000000 :: Double
-    let extractTimeInMs = fromIntegral (toNanoSecs (diffTimeSpec endExtract startExtract)) / 1000000 :: Double 
     itr <- incItr
     len <- rnodEnd
     let mips = (fromIntegral itr / 1000000.0) / (((timeInMs))/ 1000.0)
     putStrLn $ "ITRS: " ++ show itr
     putStrLn $ "INTERACTION TIME: " ++ show timeInMs ++ "ms"
-    putStrLn $ "EXTRACT TIME: " ++ show extractTimeInMs ++ "ms"
     putStrLn $ "SIZE: " ++ show len
     putStrLn $ "MIPS: " ++ show mips
 
