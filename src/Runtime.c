@@ -354,18 +354,29 @@ Term expand_ref(Loc def_idx) {
 
   Term root = term_offset_loc(nodes[0], offset);
 
-  // // Unroll loop, better branch prediction
   u32 i = 1;
-  for (; i + 2 < nodes_len; i += 3) {
-    set(i + offset, term_offset_loc(nodes[i], offset));
-    set(i + offset + 1, term_offset_loc(nodes[i + 1], offset));
-    set(i + offset + 2, term_offset_loc(nodes[i + 2], offset));
-    set(i + offset + 3, term_offset_loc(nodes[i + 3], offset));
-    set(i + offset + 4, term_offset_loc(nodes[i + 4], offset));
-    set(i + offset + 5, term_offset_loc(nodes[i + 5], offset));
-    set(i + offset + 6, term_offset_loc(nodes[i + 6], offset));
-    set(i + offset + 7, term_offset_loc(nodes[i + 7], offset));
-  }
+  // #pragma unroll
+  for (; i + 7 < nodes_len; i += 8) {
+    Term terms[8];
+    terms[0] = term_offset_loc(nodes[i], offset);
+    terms[1] = term_offset_loc(nodes[i + 1], offset);
+    terms[2] = term_offset_loc(nodes[i + 2], offset);
+    terms[3] = term_offset_loc(nodes[i + 3], offset);
+    terms[4] = term_offset_loc(nodes[i + 4], offset);
+    terms[5] = term_offset_loc(nodes[i + 5], offset);
+    terms[6] = term_offset_loc(nodes[i + 6], offset);
+    terms[7] = term_offset_loc(nodes[i + 7], offset);
+
+    // Batch setting the terms, reducing atomic store calls
+    set(i + offset, terms[0]);
+    set(i + offset + 1, terms[1]);
+    set(i + offset + 2, terms[2]);
+    set(i + offset + 3, terms[3]);
+    set(i + offset + 4, terms[4]);
+    set(i + offset + 5, terms[5]);
+    set(i + offset + 6, terms[6]);
+    set(i + offset + 7, terms[7]);
+  } 
 
   // Remaining nodes
   for (; i < nodes_len; i++) {
