@@ -146,13 +146,14 @@ const Term VOID = 0;
 typedef uint64_t u64;
 typedef _Atomic(u64) a64;
 
-typedef unsigned __int128 u128 __attribute__((aligned(16))); // NOTE gcc/clang specific
+typedef unsigned __int128 u128
+    __attribute__((aligned(16))); // NOTE gcc/clang specific
 
 // Using union for type punning (safer in C)
 typedef union {
-    u32 u;
-    i32 i;
-    f32 f;
+  u32 u;
+  i32 i;
+  f32 f;
 } TypeConverter;
 
 // Global heap
@@ -337,50 +338,89 @@ char *def_name(Loc def_idx) { return BOOK.defs[def_idx].name; }
 // offset by the index where in the BUFF it was expanded.
 //
 // Returns the ref's root, the first node in its data.
+
 Term expand_ref(Loc def_idx) {
+  // Check if buffer is initialized
   if (RNOD_END == 0) {
     printf("expand_ref: empty BUFF\n");
     exit(1);
   }
 
+  // Get definition data
   Def def = BOOK.defs[def_idx];
   const u32 nodes_len = def.nodes_len;
   const Term *nodes = def.nodes;
   const Term *rbag = def.rbag;
   const u32 rbag_len = def.rbag_len;
 
+  // Allocate space in buffer atomically
   a64 offset = atomic_fetch_add(&RNOD_END, nodes_len - 1) - 1;
-
   Term root = term_offset_loc(nodes[0], offset);
 
-  // Unroll loop, better branch prediction
-  u32 i = 1;
-  for (; i + 7 < nodes_len; i += 8) {
-    set(i + offset, term_offset_loc(nodes[i], offset));
-    set(i + offset + 1, term_offset_loc(nodes[i + 1], offset));
-    set(i + offset + 2, term_offset_loc(nodes[i + 2], offset));
-    set(i + offset + 3, term_offset_loc(nodes[i + 3], offset));
-    set(i + offset + 4, term_offset_loc(nodes[i + 4], offset));
-    set(i + offset + 5, term_offset_loc(nodes[i + 5], offset));
-    set(i + offset + 6, term_offset_loc(nodes[i + 6], offset));
-    set(i + offset + 7, term_offset_loc(nodes[i + 7], offset));
+  // Process nodes
+  if (nodes_len <= 32) {
+    // Small nodes array - process directly
+    for (u32 i = 1; i < nodes_len; i++) {
+      // Use atomic store for thread safety
+      atomic_store(&BUFF[offset + i], term_offset_loc(nodes[i], offset));
+    }
+  } else {
+// Larger nodes array - use stack buffer
+#define STACK_BUFFER_SIZE 1024
+    Term stack_buffer[STACK_BUFFER_SIZE];
+
+    // Process nodes in chunks for better cache efficiency
+    const u32 CHUNK_SIZE = 64; // Align to typical cache line size
+
+    for (u32 chunk_start = 1; chunk_start < nodes_len;
+         chunk_start += CHUNK_SIZE) {
+      u32 chunk_end = (chunk_start + CHUNK_SIZE < nodes_len)
+                          ? chunk_start + CHUNK_SIZE
+                          : nodes_len;
+
+      if (chunk_end < nodes_len) {
+        __builtin_prefetch(&nodes[chunk_end], 0, 0);
+      }
+
+      // Process current chunk
+      for (u32 i = chunk_start; i < chunk_end; i++) {
+        Term offset_term = term_offset_loc(nodes[i], offset);
+        // Use atomic store instead of memcpy
+        atomic_store(&BUFF[offset + i], offset_term);
+      }
+    }
   }
 
-  // Remaining nodes
-  for (; i < nodes_len; i++) {
-    set(i + offset, term_offset_loc(nodes[i], offset));
-  }
+// Process reference bag (always non-empty)
+#define RBAG_STACK_SIZE 128
+  Term rbag_stack[RBAG_STACK_SIZE];
 
-  // Redexes in batches of 2 (already aligned)
-  for (u32 i = 0; i < rbag_len; i += 2) {
-    rbag_push(term_offset_loc(rbag[i], offset),
-              term_offset_loc(rbag[i + 1], offset));
+  // Process reference bag in smaller batches to fit in stack
+  for (u32 batch_start = 0; batch_start < rbag_len;
+       batch_start += RBAG_STACK_SIZE) {
+    u32 batch_size = (batch_start + RBAG_STACK_SIZE < rbag_len)
+                         ? RBAG_STACK_SIZE
+                         : (rbag_len - batch_start);
+
+    // Prepare batch of rbag entries
+    for (u32 i = 0; i < batch_size; i++) {
+      u32 idx = batch_start + i;
+      if (idx + 16 < rbag_len) {
+        __builtin_prefetch(&rbag[idx + 16], 0, 0);
+      }
+      rbag_stack[i] = term_offset_loc(rbag[idx], offset);
+    }
+
+    // Push pairs to rbag
+    for (u32 i = 0; i < batch_size; i += 2) {
+      if (batch_start + i + 1 < rbag_len) { // Make sure we have a pair
+        rbag_push(rbag_stack[i], rbag_stack[i + 1]);
+      }
+    }
   }
 
   return root;
-}
-
-// Atomic Linker
+} // Atomic Linker
 static inline void move(Loc neg_loc, u64 pos);
 
 static inline void link_terms(Term neg, Term pos) {
@@ -492,30 +532,30 @@ static void interact_opynul(Loc a_loc) {
 }
 
 // Safer Utilities
-u32 u32_to_u32(u32 u) { return u; }  
+u32 u32_to_u32(u32 u) { return u; }
 
-i32 u32_to_i32(u32 u) { 
-    TypeConverter converter;
-    converter.u = u;
-    return converter.i;
+i32 u32_to_i32(u32 u) {
+  TypeConverter converter;
+  converter.u = u;
+  return converter.i;
 }
 
 f32 u32_to_f32(u32 u) {
-    TypeConverter converter;
-    converter.u = u;
-    return converter.f;
+  TypeConverter converter;
+  converter.u = u;
+  return converter.f;
 }
 
 u32 i32_to_u32(i32 i) {
-    TypeConverter converter;
-    converter.i = i;
-    return converter.u;
+  TypeConverter converter;
+  converter.i = i;
+  return converter.u;
 }
 
 u32 f32_to_u32(f32 f) {
-    TypeConverter converter;
-    converter.f = f;
-    return converter.u;
+  TypeConverter converter;
+  converter.f = f;
+  return converter.u;
 }
 
 static void interact_opynum(Loc a_loc, Lab op, u32 y, Tag y_type) {
@@ -975,19 +1015,19 @@ static void interact(Term neg, Term pos) {
   }
 }
 
-
 static inline int thread_work() {
-    Loc loc = rbag_pop();
-   
-    if(loc == 0) { return 0; }
+  Loc loc = rbag_pop();
 
-    Term neg = take(loc);
-    Term pos = take(loc + 1);
-    interact(neg, pos);
+  if (loc == 0) {
+    return 0;
+  }
 
-    return 1;
+  Term neg = take(loc);
+  Term pos = take(loc + 1);
+  interact(neg, pos);
+
+  return 1;
 }
-    
 
 void hvm_init() {
   if (BUFF == NULL) {
@@ -1030,10 +1070,9 @@ Term normalize(Term term) {
 
   boot(term_loc(term));
 
-  while (thread_work());  
-  
-  /*printf("MAX_THREADS: %u\n", MAX_THREADS);*/
-  
+  while (thread_work())
+    ;
+
   return get(0);
 }
 
@@ -1078,6 +1117,7 @@ static char *tag_to_str(Tag tag) {
   }
 }
 
+// FILE VERSION: (or you can >> the stdio into a file)
 /*void dump_buff() {*/
 /*  FILE *file = fopen("multi.txt", "w");*/
 /*  if (file == NULL) {*/
@@ -1117,7 +1157,7 @@ static char *tag_to_str(Tag tag) {
 /**/
 /*  fclose(file);*/
 /*}*/
-
+// STD VERSION
 void dump_buff() {
   printf("------------------\n");
   printf("      NODES\n");

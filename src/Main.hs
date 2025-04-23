@@ -48,8 +48,9 @@ cliRun filePath showStats = do
   start <- getTime Monotonic
   term <- Type.normalize main
   end <- getTime Monotonic
-
+    
   net <- extractNet term
+
   putStrLn $ netToString net
 
   when showStats $ do
@@ -59,7 +60,7 @@ cliRun filePath showStats = do
     len <- rnodEnd
     let mips = (fromIntegral itr / 1000000.0) / (((timeInMs))/ 1000.0)
     putStrLn $ "ITRS: " ++ show itr
-    putStrLn $ "TIME: " ++ show timeInMs ++ "ms"
+    putStrLn $ "INTERACTION TIME: " ++ show timeInMs ++ "ms"
     putStrLn $ "SIZE: " ++ show len
     putStrLn $ "MIPS: " ++ show mips
 
