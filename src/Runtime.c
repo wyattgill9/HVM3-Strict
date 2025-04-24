@@ -1,5 +1,6 @@
 // HVM3-Strict Core: single-thread, polarized, LAM/APP & DUP/SUP only
 
+#include <inttypes.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -8,7 +9,22 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define DEBUG_LOG(fmt, ...) printf("[DEBUG] " fmt "\n", ##__VA_ARGS__)
+#if defined(__x86_64__) || defined(_M_X64)
+  #include <immintrin.h>
+  #define YIELD() _mm_pause()
+#elif defined(__aarch64__)
+  #if defined(__ARM_ACLE) // ARM Compiler Language Extensions
+    #include <arm_acle.h>
+    #define YIELD() __yield()
+  #else // Fallback for older ARM compilers
+    #define YIELD() __asm__ volatile ("yield")
+  #endif
+#else
+  // Fallback to prevent spin loops from being optimized away
+  #define YIELD() atomic_thread_fence(memory_order_relaxed)
+#endif
+
+#define DEBUG_LOG(fmt, ...) fprintf(stderr, "[DEBUG] " fmt "\n", ##__VA_ARGS__)
 
 // WINDOWS WIP
 #if defined(WIN16) || defined(WIN32) || defined(WIN64) || defined(_WIN16) ||   \
@@ -93,9 +109,9 @@ int thread_join(pthread_t thread, void **retval) {
 
 #endif
 
-#define MAX_THREADS get_num_threads() // uncomment for multi-threading
+//#define MAX_THREADS get_num_threads() // uncomment for multi-threading
 
-/*int MAX_THREADS = 1; // uncomment for testing*/
+const int MAX_THREADS = 10;
 
 typedef uint8_t Tag;   //  8 bits
 typedef uint32_t Lab;  // 24 bits
@@ -158,12 +174,24 @@ typedef union {
 } TypeConverter;
 
 // Global heap
-static a64 *BUFF = NULL;
+static u64 *BUFF = NULL;
 static a64 RNOD_INI = 0;
 static a64 RNOD_END = 0;
-static a64 RBAG = 0x1000000;
 static a64 RBAG_INI = 0;
 static a64 RBAG_END = 0;
+
+// Uncomment to enable. Requires ~3GB node space.
+//#define SUPPORT_HEIGHT_22
+
+#ifdef SUPPORT_HEIGHT_22
+static const u64 BUFF_CNT = (1ULL << 30);
+static const u64 RBAG = 0x10000000;
+#else
+static const u64 BUFF_CNT = (1ULL << 26);
+static const u64 RBAG = 0x1000000;
+#endif
+
+static const u64 RBAG_MAX = BUFF_CNT - RBAG;
 
 // Global book
 typedef struct Def {
@@ -277,6 +305,16 @@ void set(Loc loc, Term term) {
   }
 }
 
+static u128 take_pair(Loc loc) {
+  //u128* buff = (u128*)&BUFF[loc];
+  return __atomic_exchange_n((u128*)&BUFF[loc], 0ULL, __ATOMIC_RELAXED);
+}
+
+static void set_pair(Loc loc, u128 pair) {
+  //u128* buff = (u128*)&BUFF[loc];
+  __atomic_store_n((u128*)&BUFF[loc], pair, __ATOMIC_RELAXED);
+}
+
 Loc port(u64 n, Loc x) { return n + x - 1; }
 
 // Allocation
@@ -287,40 +325,78 @@ Loc alloc_node(u64 arity) {
 
 u64 inc_itr() {
   return atomic_load(&RNOD_END) / 2;
-} // if (atomic_load(&RNOD_END) % 2 == 0) { return atomic_load(&RNOD_END) / 2; }
-  // }
+} 
+
+static u128 term_pair(Term neg, Term pos) {
+  return ((u128)pos << 64) | neg;
+}
+
+static u64 pair_pos(u128 pair) {
+  return (pair >> 64) & 0xFFFFFFFFFFFFFFFF;
+}
+
+static u64 pair_neg(u128 pair) {
+  return pair & 0xFFFFFFFFFFFFFFFF;
+}
 
 Loc rbag_push(Term neg, Term pos) {
   // Atomically fetch and add to increment RBAG_END
   // This ensures thread-safe allocation of a new location pair
-  u64 current_end = atomic_fetch_add(&RBAG_END, 2);
+  u64 end = atomic_fetch_add(&RBAG_END, 2);
 
   // Calculate the absolute location for this pair
-  Loc loc = RBAG + current_end;
+  Loc loc = RBAG + end;
 
-  // Set the negative and positive terms
-  atomic_store_explicit(&BUFF[loc + 0], neg, memory_order_release);
-  atomic_store_explicit(&BUFF[loc + 1], pos, memory_order_release);
+  // Store the negative and positive terms
+  set_pair(loc, term_pair(neg, pos));
 
   // Return the location of the newly pushed pair
   return loc;
 }
 
-Loc rbag_pop() {
+Loc sequential_rbag_pop() {
   // Use atomic fetch_add to increment RBAG_INI atomically
   // This ensures thread-safe access to the reduction bag
-  u64 current_ini = atomic_fetch_add(&RBAG_INI, 2);
-  u64 current_end = atomic_load_explicit(&RBAG_END, memory_order_acquire);
+  u64 ini = atomic_fetch_add(&RBAG_INI, 2);
+  u64 end = atomic_load_explicit(&RBAG_END, memory_order_relaxed);
 
   // Check if we've reached or exceeded the end of the reduction bag
-  if (current_ini >= current_end) {
+  if (ini >= end) {
     // If we've exhausted the reduction bag, return 0
     return 0;
   }
 
   // Calculate and return the location
-  // current_ini represents the starting index of the location pair
-  return RBAG + current_ini;
+  // ini represents the starting index of the location pair
+  return RBAG + ini;
+}
+
+Loc parallel_rbag_pop() {
+  while (1) {
+    // Check if there's an item available without modifying indices
+    u64 start = atomic_load(&RBAG_INI); // TODO: relaxed?
+    u64 end = atomic_load(&RBAG_END);
+    
+    if (start >= end) {
+      // Queue is empty -- wait a bit to allow other threads to complete
+      const u32 MAX_ATTEMPTS = 10;
+      for (u32 attempts = 0; start >= end && attempts < MAX_ATTEMPTS; ++attempts) {
+        usleep(100);
+        end = atomic_load_explicit(&RBAG_END, memory_order_relaxed);
+      }
+      // Queue might be genuinely empty
+      if (start >= end) {
+        return 0;
+      }
+    }
+    
+    // Try to claim the next two slots
+    if (atomic_compare_exchange_strong(&RBAG_INI, &start, start + 2)) {
+      // Success
+      return RBAG + start;
+    }
+    // Another thread claimed those slots, try again
+  }
 }
 
 Loc rbag_ini() {
@@ -403,8 +479,14 @@ Term expand_ref(Loc def_idx) {
   const u32 rbag_len = def.rbag_len;
 
   // Allocate space in buffer atomically
-  a64 offset = atomic_fetch_add(&RNOD_END, nodes_len - 1) - 1;
+  u64 offset = atomic_fetch_add(&RNOD_END, nodes_len - 1) - 1;
   Term root = term_offset_loc(nodes[0], offset);
+
+  if (offset + nodes_len >= RBAG + RBAG_INI) {
+    fprintf(stderr, "REF expansion exceeds RBAG_INI:%lu, offset:%lu, nodes_len:%u\n",
+           RBAG+RBAG_INI, offset, nodes_len);
+    exit(1);
+  }
 
   // Process nodes
   if (nodes_len <= 32) {
@@ -414,8 +496,8 @@ Term expand_ref(Loc def_idx) {
       atomic_store(&BUFF[offset + i], term_offset_loc(nodes[i], offset));
     }
   } else {
-// Larger nodes array - use stack buffer
-#define STACK_BUFFER_SIZE 1024
+    // Larger nodes array - use stack buffer
+    const int STACK_BUFFER_SIZE = 1024;
     Term stack_buffer[STACK_BUFFER_SIZE];
 
     // Process nodes in chunks for better cache efficiency
@@ -440,8 +522,8 @@ Term expand_ref(Loc def_idx) {
     }
   }
 
-// Process reference bag (always non-empty)
-#define RBAG_STACK_SIZE 128
+  // Process reference bag (always non-empty)
+  const int RBAG_STACK_SIZE = 128;
   Term rbag_stack[RBAG_STACK_SIZE];
 
   // Process reference bag in smaller batches to fit in stack
@@ -469,7 +551,9 @@ Term expand_ref(Loc def_idx) {
   }
 
   return root;
-} // Atomic Linker
+}
+
+// Atomic Linker
 static inline void move(Loc neg_loc, u64 pos);
 
 static inline void link_terms(Term neg, Term pos) {
@@ -1064,8 +1148,8 @@ static void interact(Term neg, Term pos) {
   }
 }
 
-static inline int thread_work() {
-  Loc loc = rbag_pop();
+static inline int sequential_step() {
+  Loc loc = sequential_rbag_pop();
 
   if (loc == 0) {
     return 0;
@@ -1078,15 +1162,36 @@ static inline int thread_work() {
   return 1;
 }
 
+static void* parallel_step(void*) {
+  while (1) {
+    Loc loc = parallel_rbag_pop();
+    if (loc == 0) {
+      return NULL;
+    }
+    // As RBAG_END is incremented prior to term(s) being written, there is a
+    // race condition where another thread may read 0ULL from that location.
+    while (1) {
+      u128 pair = take_pair(loc);
+      if (pair > 0ULL) {
+        interact(pair_neg(pair), pair_pos(pair));
+        break;
+      }
+      YIELD();
+    }
+  }
+  return (void*)1;
+}
+
 void hvm_init() {
+  const u64 BUFF_SIZE = BUFF_CNT * sizeof(u64);
   if (BUFF == NULL) {
-    BUFF = aligned_alloc(64, (1ULL << 26) * sizeof(a64));
+    BUFF = aligned_alloc(64, BUFF_SIZE);
     if (BUFF == NULL) {
       fprintf(stderr, "Memory allocation failed\n");
       exit(EXIT_FAILURE);
     }
   }
-  memset(BUFF, 0, (1ULL << 26) * sizeof(a64)); // FIXED ALLOCATION
+  memset(BUFF, 0, BUFF_SIZE);
 
   atomic_store(&RNOD_INI, 0);
   atomic_store(&RNOD_END, 0);
@@ -1111,6 +1216,20 @@ void boot(Loc def_idx) {
   set(root, expand_ref(def_idx));
 }
 
+static void parallel_normalize() {
+  thread_t threads[MAX_THREADS];
+  int thread_ids[MAX_THREADS];
+
+  for (int i = 0; i < MAX_THREADS; i++) {
+    thread_ids[i] = i;
+    int rc = thread_create(&threads[i], NULL, parallel_step, &thread_ids[i]);
+  }
+
+  for (int i = 0; i < MAX_THREADS; i++) {
+    thread_join(threads[i], NULL);
+  }
+}
+
 Term normalize(Term term) {
   if (term_tag(term) != REF) {
     printf("normalizing non-ref\n");
@@ -1119,9 +1238,13 @@ Term normalize(Term term) {
 
   boot(term_loc(term));
 
-  while (thread_work())
-    ;
-
+  if (MAX_THREADS == 1) {
+    while (sequential_step())
+      ;
+  } else {
+    parallel_normalize();
+  }
+    
   return get(0);
 }
 
