@@ -6,95 +6,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#define DEBUG_LOG(fmt, ...) printf("[DEBUG] " fmt "\n", ##__VA_ARGS__)
-
-// WINDOWS WIP
-#if defined(WIN16) || defined(WIN32) || defined(WIN64) || defined(_WIN16) ||   \
-    defined(_WIN32) || defined(_WIN64) || defined(__TOS_WIN__) ||              \
-    defined(__WIN16) || defined(__WIN16__) || defined(__WIN32) ||              \
-    defined(__WIN32__) || defined(__WIN64) || defined(__WIN64__) ||            \
-    defined(__WINDOWS__)
-
-#include <windows.h>
-
-typedef HANDLE thread_t;
-
-int get_num_threads() {
-  SYSTEM_INFO sysinfo;
-  GetSystemInfo(&sysinfo);
-  return sysinfo.dwNumberOfProcessors;
-}
-
-typedef void *(*thread_func)(void *);
-
-int thread_create(thread_t *thread, void *attr, thread_func start_routine,
-                  void *arg) {
-  if (attr != NULL) {
-    printf("Ignoring thread attributes in Windows version\n");
-  }
-
-  *thread =
-      CreateThread(NULL, // Default security attributes
-                   0,    // Default stack size
-                   (LPTHREAD_START_ROUTINE)start_routine, // Thread function
-                   arg, // Thread function argument
-                   0,   // Creation flags (0 = run immediately)
-                   NULL // Thread ID (optional, can be NULL)
-      );
-
-  if (*thread == NULL) {
-    return GetLastError();
-  }
-
-  return 0;
-}
-
-int thread_join(HANDLE thread, void **retval) {
-  DWORD wait_result = WaitForSingleObject(thread, INFINITE);
-
-  if (wait_result == WAIT_FAILED) {
-    return GetLastError();
-  }
-
-  if (retval != NULL) {
-    DWORD exit_code;
-    if (GetExitCodeThread(thread, &exit_code)) {
-      *retval = (void *)(intptr_t)exit_code;
-    }
-  }
-
-  CloseHandle(thread);
-
-  return 0;
-}
-
-#else
-
 #include <pthread.h>
 #include <unistd.h>
 
-typedef pthread_t thread_t;
+#define DEBUG_LOG(fmt, ...) printf("[DEBUG] " fmt "\n", ##__VA_ARGS__)
 
-int get_num_threads() {
-  long nprocs = sysconf(_SC_NPROCESSORS_ONLN);
-  return (nprocs < 1) ? 1 : nprocs;
-}
-
-int thread_create(pthread_t *thread, const pthread_attr_t *attr,
-                  void *(*start_routine)(void *), void *arg) {
-  return pthread_create(thread, attr, start_routine, arg);
-}
-
-int thread_join(pthread_t thread, void **retval) {
-  return pthread_join(thread, retval);
-}
-
-#endif
-
-#define MAX_THREADS get_num_threads() // uncomment for multi-threading
-
-/*int MAX_THREADS = 1; // uncomment for testing*/
+#define MAX_THREADS get_num_threads()
 
 typedef uint8_t Tag;   //  8 bits
 typedef uint32_t Lab;  // 24 bits
