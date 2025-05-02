@@ -1,17 +1,20 @@
 // HVM3-Strict Core: single-thread, polarized, LAM/APP & DUP/SUP only
 
+#include <pthread.h>
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
 #include <unistd.h>
 
 #define DEBUG_LOG(fmt, ...) printf("[DEBUG] " fmt "\n", ##__VA_ARGS__)
 
 #define MAX_THREADS get_num_threads()
+
+#define STACK_BUFFER_SIZE 1024
+#define RBAG_STACK_SIZE 128
 
 typedef uint8_t Tag;   //  8 bits
 typedef uint32_t Lab;  // 24 bits
@@ -274,47 +277,34 @@ Term expand_ref(Loc def_idx) {
   a64 offset = atomic_fetch_add(&RNOD_END, nodes_len - 1) - 1;
   Term root = term_offset_loc(nodes[0], offset);
 
-  // Process nodes
-  if (nodes_len <= 32) {
-    // Small nodes array - process directly
-    for (u32 i = 1; i < nodes_len; i++) {
-      // Use atomic store for thread safety
-      atomic_store(&BUFF[offset + i], term_offset_loc(nodes[i], offset));
+  Term stack_buffer[STACK_BUFFER_SIZE];
+
+  // Process nodes in chunks for better cache efficiency
+  const u32 CHUNK_SIZE = 64; // Align to typical cache line size
+
+  for (u32 chunk_start = 1; chunk_start < nodes_len;
+       chunk_start += CHUNK_SIZE) {
+    u32 chunk_end = (chunk_start + CHUNK_SIZE < nodes_len)
+                        ? chunk_start + CHUNK_SIZE
+                        : nodes_len;
+
+    if (chunk_end < nodes_len) {
+      __builtin_prefetch(&nodes[chunk_end], 0, 0);
     }
-  } else {
-// Larger nodes array - use stack buffer
-#define STACK_BUFFER_SIZE 1024
-    Term stack_buffer[STACK_BUFFER_SIZE];
 
-    // Process nodes in chunks for better cache efficiency
-    const u32 CHUNK_SIZE = 64; // Align to typical cache line size
-
-    for (u32 chunk_start = 1; chunk_start < nodes_len;
-         chunk_start += CHUNK_SIZE) {
-      u32 chunk_end = (chunk_start + CHUNK_SIZE < nodes_len)
-                          ? chunk_start + CHUNK_SIZE
-                          : nodes_len;
-
-      if (chunk_end < nodes_len) {
-        __builtin_prefetch(&nodes[chunk_end], 0, 0);
-      }
-
-      // Process current chunk
-      for (u32 i = chunk_start; i < chunk_end; i++) {
-        Term offset_term = term_offset_loc(nodes[i], offset);
-        // Use atomic store instead of memcpy
-        atomic_store(&BUFF[offset + i], offset_term);
-      }
+    // Process current chunk
+    for (u32 i = chunk_start; i < chunk_end; i++) {
+      Term offset_term = term_offset_loc(nodes[i], offset);
+      // Use atomic store instead of memcpy
+      atomic_store(&BUFF[offset + i], offset_term);
     }
   }
 
-// Process reference bag (always non-empty)
-#define RBAG_STACK_SIZE 128
+  // Process reference bag (always non-empty)
   Term rbag_stack[RBAG_STACK_SIZE];
 
   // Process reference bag in smaller batches to fit in stack
-  for (u32 batch_start = 0; batch_start < rbag_len;
-       batch_start += RBAG_STACK_SIZE) {
+  for (u32 batch_start = 0; batch_start < rbag_len; batch_start += RBAG_STACK_SIZE) {
     u32 batch_size = (batch_start + RBAG_STACK_SIZE < rbag_len)
                          ? RBAG_STACK_SIZE
                          : (rbag_len - batch_start);
@@ -337,7 +327,9 @@ Term expand_ref(Loc def_idx) {
   }
 
   return root;
-} // Atomic Linker
+}
+
+// Atomic Linker
 static inline void move(Loc neg_loc, u64 pos);
 
 static inline void link_terms(Term neg, Term pos) {
@@ -1074,6 +1066,7 @@ static char *tag_to_str(Tag tag) {
 /**/
 /*  fclose(file);*/
 /*}*/
+
 // STD VERSION
 void dump_buff() {
   printf("------------------\n");
