@@ -260,9 +260,8 @@ char *def_name(Loc def_idx) { return BOOK.defs[def_idx].name; }
 // Returns the ref's root, the first node in its data.
 
 Term expand_ref(Loc def_idx) {
-  // Check if buffer is initialized
   if (RNOD_END == 0) {
-    printf("expand_ref: empty BUFF\n");
+    DEBUG_LOG("expand_ref: empty BUFF\n");
     exit(1);
   }
 
@@ -279,8 +278,7 @@ Term expand_ref(Loc def_idx) {
 
   Term stack_buffer[STACK_BUFFER_SIZE];
 
-  // Process nodes in chunks for better cache efficiency
-  const u32 CHUNK_SIZE = 64; // Align to typical cache line size
+  const u32 CHUNK_SIZE = 64;
 
   for (u32 chunk_start = 1; chunk_start < nodes_len;
        chunk_start += CHUNK_SIZE) {
@@ -295,21 +293,20 @@ Term expand_ref(Loc def_idx) {
     // Process current chunk
     for (u32 i = chunk_start; i < chunk_end; i++) {
       Term offset_term = term_offset_loc(nodes[i], offset);
-      // Use atomic store instead of memcpy
       atomic_store(&BUFF[offset + i], offset_term);
     }
   }
 
-  // Process reference bag (always non-empty)
   Term rbag_stack[RBAG_STACK_SIZE];
 
   // Process reference bag in smaller batches to fit in stack
-  for (u32 batch_start = 0; batch_start < rbag_len; batch_start += RBAG_STACK_SIZE) {
+  for (u32 batch_start = 0; batch_start < rbag_len;
+       batch_start += RBAG_STACK_SIZE) {
     u32 batch_size = (batch_start + RBAG_STACK_SIZE < rbag_len)
                          ? RBAG_STACK_SIZE
                          : (rbag_len - batch_start);
 
-    // Prepare batch of rbag entries
+    // Prep batch of rbag entries
     for (u32 i = 0; i < batch_size; i++) {
       u32 idx = batch_start + i;
       if (idx + 16 < rbag_len) {
@@ -318,9 +315,8 @@ Term expand_ref(Loc def_idx) {
       rbag_stack[i] = term_offset_loc(rbag[idx], offset);
     }
 
-    // Push pairs to rbag
     for (u32 i = 0; i < batch_size; i += 2) {
-      if (batch_start + i + 1 < rbag_len) { // Make sure we have a pair
+      if (batch_start + i + 1 < rbag_len) {
         rbag_push(rbag_stack[i], rbag_stack[i + 1]);
       }
     }
@@ -728,7 +724,7 @@ static void interact_matnul(Loc a_loc, Lab mat_len) {
 
 static void interact_matnum(Loc mat_loc, Lab mat_len, u32 n, Tag n_type) {
   if (n_type != U32) {
-    printf("match with non-U32\n");
+    DEBUG_LOG("match with non-U32\n");
     exit(1);
   }
 
@@ -939,14 +935,20 @@ static inline int thread_work() {
 }
 
 void hvm_init() {
+  size_t buff_size = 1ULL << 26;
+
   if (BUFF == NULL) {
-    BUFF = aligned_alloc(64, (1ULL << 26) * sizeof(a64));
-    if (BUFF == NULL) {
-      fprintf(stderr, "Memory allocation failed\n");
+    int res = posix_memalign(
+        (void **)&BUFF, 64,
+        buff_size * sizeof(a64)); // Returns 0 on success, mem error otherwise
+                                  // (better error handling)
+    if (res != 0) {
+      fprintf(stderr, "Memory allocation failed: %d\n", res);
       exit(EXIT_FAILURE);
     }
   }
-  memset(BUFF, 0, (1ULL << 26) * sizeof(a64)); // FIXED ALLOCATION
+
+  memset(BUFF, 0, buff_size * sizeof(a64));
 
   atomic_store(&RNOD_INI, 0);
   atomic_store(&RNOD_END, 0);
@@ -963,7 +965,7 @@ void hvm_free() {
 
 void boot(Loc def_idx) {
   if (RNOD_END || RBAG_END) {
-    printf("booting on non-empty state\n");
+    DEBUG_LOG("booting on non-empty state\n");
     exit(1);
   }
 
@@ -973,7 +975,7 @@ void boot(Loc def_idx) {
 
 Term normalize(Term term) {
   if (term_tag(term) != REF) {
-    printf("normalizing non-ref\n");
+    DEBUG_LOG("normalizing non-ref\n");
     exit(1);
   }
 
