@@ -118,8 +118,8 @@ foreign import ccall unsafe "Runtime.c def_name"
 defName :: Loc -> IO String
 defName loc = defName_ loc >>= peekCString
 
-foreign import ccall unsafe "Runtime.c swap"
-  swap :: Loc -> Term -> IO Term
+-- foreign import ccall unsafe "Runtime.c swap"
+--  swap :: Loc -> Term -> IO Term
 
 foreign import ccall unsafe "Runtime.c get"
   get :: Loc -> IO Term
@@ -127,22 +127,22 @@ foreign import ccall unsafe "Runtime.c get"
 foreign import ccall unsafe "Runtime.c set"
   set :: Loc -> Term -> IO ()
 
-foreign import ccall unsafe "Runtime.c rbag_push"
+foreign import ccall unsafe "Runtime.c ffi_rbag_push"
   rbagPush :: Term -> Term -> IO ()
 
-foreign import ccall unsafe "Runtime.c rbag_ini"
+foreign import ccall unsafe "Runtime.c ffi_rbag_ini"
   rbagIni :: IO Loc
 
-foreign import ccall unsafe "Runtime.c rbag_end"
+foreign import ccall unsafe "Runtime.c ffi_rbag_end"
   rbagEnd :: IO Loc
 
-foreign import ccall unsafe "Runtime.c rnod_end"
+foreign import ccall unsafe "Runtime.c ffi_rnod_end"
   rnodEnd :: IO Loc
 
 -- foreign import ccall unsafe "Runtime.c take"
 --   take :: Loc -> IO Term
 
-foreign import ccall unsafe "Runtime.c alloc_node"
+foreign import ccall unsafe "Runtime.c ffi_alloc_node"
   allocNode :: Word64 -> IO Loc
 
 foreign import ccall unsafe "Runtime.c inc_itr"
@@ -153,6 +153,9 @@ foreign import ccall unsafe "Runtime.c normalize"
 
 foreign import ccall unsafe "Runtime.c dump_buff"
   dumpBuff :: IO ()
+
+foreign import ccall unsafe "Runtime.c handle_failure"
+  callFailureHandler :: IO ()
 
 -- Convenience Functions
 

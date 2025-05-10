@@ -50,19 +50,20 @@ cliRun filePath showStats = do
   end <- getTime Monotonic
     
   net <- extractNet term
-
-  putStrLn $ netToString net
+  let str = netToString net
+  putStrLn $ str
+  when (not (null str) && head str == 'v') $ do
+    callFailureHandler
 
   when showStats $ do
-    -- end <- getCPUTime
     let timeInMs = fromIntegral (toNanoSecs (diffTimeSpec end start)) / 1000000 :: Double
     itr <- incItr
     len <- rnodEnd
     let mips = (fromIntegral itr / 1000000.0) / (((timeInMs))/ 1000.0)
     putStrLn $ "ITRS: " ++ show itr
-    putStrLn $ "INTERACTION TIME: " ++ show timeInMs ++ "ms"
+    putStrLn $ "TIME: " ++ show (truncate timeInMs) ++ "ms"
     putStrLn $ "SIZE: " ++ show len
-    putStrLn $ "MIPS: " ++ show mips
+    putStrLn $ "MIPS: " ++ show (truncate mips)
 
   hvmFree
 
