@@ -1,6 +1,9 @@
 // HVM3-Strict Core: single-thread, polarized, LAM/APP & DUP/SUP only
+// parallel support in progress.
 
 #include <inttypes.h>
+#include <math.h>
+#include <pthread.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -8,94 +11,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#if defined(__x86_64__) || defined(_M_X64)
-  #include <immintrin.h>
-  #define YIELD() _mm_pause()
-#elif defined(__aarch64__)
-  #if defined(__ARM_ACLE) // ARM Compiler Language Extensions
-    #include <arm_acle.h>
-    #define YIELD() __yield()
-  #else // Fallback for older ARM compilers
-    #define YIELD() __asm__ volatile ("yield")
-  #endif
-#else
-  // Fallback to prevent spin loops from being optimized away
-  #define YIELD() atomic_thread_fence(memory_order_relaxed)
-#endif
+#include <unistd.h>
 
 #define DEBUG_LOG(fmt, ...) fprintf(stderr, "[DEBUG] " fmt "\n", ##__VA_ARGS__)
-
-// WINDOWS WIP
-#if defined(WIN16) || defined(WIN32) || defined(WIN64) || defined(_WIN16) ||   \
-    defined(_WIN32) || defined(_WIN64) || defined(__TOS_WIN__) ||              \
-    defined(__WIN16) || defined(__WIN16__) || defined(__WIN32) ||              \
-    defined(__WIN32__) || defined(__WIN64) || defined(__WIN64__) ||            \
-    defined(__WINDOWS__)
-
-#include <windows.h>
-
-typedef HANDLE thread_t;
-
-int get_num_threads() {
-  SYSTEM_INFO sysinfo;
-  GetSystemInfo(&sysinfo);
-  return sysinfo.dwNumberOfProcessors;
-}
-
-typedef void *(*thread_func)(void *);
-
-int thread_create(thread_t *thread, void *attr, thread_func start_routine,
-                  void *arg) {
-  if (attr != NULL) {
-    printf("Ignoring thread attributes in Windows version\n");
-  }
-
-  *thread =
-      CreateThread(NULL, // Default security attributes
-                   0,    // Default stack size
-                   (LPTHREAD_START_ROUTINE)start_routine, // Thread function
-                   arg, // Thread function argument
-                   0,   // Creation flags (0 = run immediately)
-                   NULL // Thread ID (optional, can be NULL)
-      );
-
-  if (*thread == NULL) {
-    return GetLastError();
-  }
-
-  return 0;
-}
-
-int thread_join(HANDLE thread, void **retval) {
-  DWORD wait_result = WaitForSingleObject(thread, INFINITE);
-
-  if (wait_result == WAIT_FAILED) {
-    return GetLastError();
-  }
-
-  if (retval != NULL) {
-    DWORD exit_code;
-    if (GetExitCodeThread(thread, &exit_code)) {
-      *retval = (void *)(intptr_t)exit_code;
-    }
-  }
-
-  CloseHandle(thread);
-
-  return 0;
-}
-
-#else
-
-#include <pthread.h>
-#include <unistd.h>
 
 typedef pthread_t thread_t;
 
 int get_num_threads() {
   long nprocs = sysconf(_SC_NPROCESSORS_ONLN);
-  return (nprocs < 1) ? 1 : nprocs;
+  return (nprocs <= 1) ? 1 : 1 << (int)log2(nprocs);
 }
 
 int thread_create(pthread_t *thread, const pthread_attr_t *attr,
@@ -107,20 +31,7 @@ int thread_join(pthread_t thread, void **retval) {
   return pthread_join(thread, retval);
 }
 
-#endif
-
-//#define MAX_THREADS get_num_threads() // uncomment for multi-threading
-
-const int MAX_THREADS = 10;
-
-typedef uint8_t Tag;   //  8 bits
-typedef uint32_t Lab;  // 24 bits
-typedef uint32_t Loc;  // 32 bits
-typedef uint64_t Term; // Loc | Lab | Tag
-typedef uint32_t u32;
-typedef uint64_t u64;
-typedef int32_t i32;
-typedef float f32;
+//const int TPC = get_num_threads(); // don't enable this, change the enum below
 
 // Constants
 #define VAR 0x01
@@ -138,8 +49,6 @@ typedef float f32;
 #define I32 0x0D
 #define F32 0x0E
 #define MAT 0x0F
-
-const Term VOID = 0;
 
 // Operators
 #define OP_ADD 0x00
@@ -160,11 +69,20 @@ const Term VOID = 0;
 #define OP_RSH 0x0F
 
 // Types
+typedef int32_t i32;
+typedef uint32_t u32;
+typedef float f32;
+typedef int64_t i64;
 typedef uint64_t u64;
 typedef _Atomic(u64) a64;
+// NOTE alignment is gcc/clang specific
+typedef unsigned __int128 u128 __attribute__((aligned(16)));
 
-typedef unsigned __int128 u128
-    __attribute__((aligned(16))); // NOTE gcc/clang specific
+typedef uint8_t Tag; //  8 bits
+typedef u32 Lab;     // 24 bits
+typedef u32 Loc;     // 32 bits
+typedef u64 Term;    // Loc | Lab | Tag
+typedef u128 Pair;   // Term | Term
 
 // Using union for type punning (safer in C)
 typedef union {
@@ -174,24 +92,54 @@ typedef union {
 } TypeConverter;
 
 // Global heap
-static u64 *BUFF = NULL;
+static u64 *BUFF = NULL;  // NOTE: intentionally *not* atomic ptr.
+/*
 static a64 RNOD_INI = 0;
 static a64 RNOD_END = 0;
 static a64 RBAG_INI = 0;
 static a64 RBAG_END = 0;
+*/
 
-// Uncomment to enable. Requires ~3GB node space.
-//#define SUPPORT_HEIGHT_22
+// Heap configuration options
+enum : u64 {
+  // 1GiB heap
+  HEAP_1GB = (1ULL << 27) * sizeof(u64),  // 128Mi * 8 bytes = 1GiB
 
-#ifdef SUPPORT_HEIGHT_22
-static const u64 BUFF_CNT = (1ULL << 30);
-static const u64 RBAG = 0x10000000;
-#else
-static const u64 BUFF_CNT = (1ULL << 26);
-static const u64 RBAG = 0x1000000;
-#endif
+  //////////////////////////
+  // Choose a heap size here
+  //////////////////////////
+  HEAP_SIZE = HEAP_1GB * 4,
 
-static const u64 RBAG_MAX = BUFF_CNT - RBAG;
+  // Cache line size
+  CLINE_BYTES = 64,
+  CLINE_U64 = CLINE_BYTES / sizeof(u64),
+  //  RBAG_MAX = HEAP_SIZE / sizeof(u64),
+
+  // Threads per CPU
+  TPC = 1,
+
+  // Various redex bag starting indices within the heap to choose from.
+  // The remaining percentage is used for node storage.
+
+  // Cache-aligned and named for the percentage of heap used.
+  RBAG_25_PCT = ((HEAP_SIZE - HEAP_SIZE / 4) / CLINE_BYTES) * CLINE_U64,
+  RBAG_50_PCT = ((HEAP_SIZE / 2) / CLINE_BYTES) * CLINE_U64,
+  RBAG_75_PCT = ((HEAP_SIZE / 4) / CLINE_BYTES) * CLINE_U64,
+  // TODO: "RBAG_16M" to match HVM2
+
+  ////////////////////////////////////
+  // Choose a RBAG starting index here
+  ////////////////////////////////////
+  RBAG = RBAG_50_PCT
+};
+
+enum : u32 {
+  // Calculate RBAG_LEN and NODE_LEN: number of u64 elements *per thread*
+  // TODO: MUST be 16-byte aligned. 64-byte alignment might be preferable.
+  // TODO: actually these could be in terms of u128 elements
+  RBAG_LEN = (HEAP_SIZE - RBAG) / (TPC * sizeof(u64)),
+  NODE_LEN = RBAG / (TPC * sizeof(u64))
+};
 
 // Global book
 typedef struct Def {
@@ -209,15 +157,80 @@ typedef struct Book {
 } Book;
 
 static Book BOOK = {
-    .defs = NULL,
-    .len = 0,
-    .cap = 0,
+  .defs = NULL,
+  .len = 0,
+  .cap = 0,
 };
+
+const Term VOID = 0;
+
+// Local Thread Memory
+typedef struct TM {
+  u32  tid; // thread id
+  Loc  nput; // next node allocation attempt index
+  Loc  rput; // next rbag push index
+  //u32  hput; // next hbag push index
+  Loc  sidx; // steal index
+  u64  itrs; // interaction count
+  Loc  nloc[0xFFF]; // node allocation indices
+  //Pair hbag_buf[HLEN]; // high-priority redexes
+} TM;
+
+static TM *tms[TPC];
 
 // Debugging
 static char *tag_to_str(Tag tag);
+static char *itr_str(u32 itr);
 void dump_term(Loc loc);
 void dump_buff();
+
+// TM operations
+void tm_reset(TM *tm) {
+  tm->nput = 2;
+  tm->rput = 0;
+  //tm->hput = 0;
+  tm->sidx = 0;
+}
+
+TM *tm_new(u64 tid) {
+  TM *tm = aligned_alloc(CLINE_BYTES, sizeof(TM));
+  if (tm == NULL) {
+    fprintf(stderr, "TM memory allocation failed\n");
+    exit(EXIT_FAILURE);
+  }
+  tm->tid = tid;
+  tm->itrs = 0;
+  tm_reset(tm);
+  return tm;
+}
+
+void alloc_static_tms() {
+  for (u64 t = 0; t < TPC; ++t) {
+    tms[t] = tm_new(t);
+  }
+}
+
+void free_static_tms() {
+  for (u64 t = 0; t < TPC; ++t) {
+    if (tms[t] != NULL) {
+      free(tms[t]);
+      tms[t] = NULL;
+    }
+  }
+}
+
+// Pair operations
+static Pair pair_new(Term neg, Term pos) {
+  return ((Pair)pos << 64) | neg;
+}
+
+static Term pair_pos(Pair pair) {
+  return (pair >> 64) & 0xFFFFFFFFFFFFFFFF;
+}
+
+static Term pair_neg(Pair pair) {
+  return pair & 0xFFFFFFFFFFFFFFFF;
+}
 
 // Term operations
 Term term_new(Tag tag, Lab lab, Loc loc) {
@@ -230,15 +243,34 @@ Lab term_lab(Term term) { return (term >> 8) & 0xFFFFFF; }
 
 Loc term_loc(Term term) { return (term >> 32) & 0xFFFFFFFF; }
 
-Term term_offset_loc(Term term, Loc offset) {
+static Term term_with_loc(Term term, Loc loc) {
+  return (((Term)loc) << 32) | (term & 0xFFFFFFFF);
+}
+
+static bool term_has_loc(Term term) {
   Tag tag = term_tag(term);
-  if (tag == SUB || tag == NUL || tag == ERA || tag == REF || tag == U32) {
-    return term;
-  }
+  return !(tag == SUB || tag == NUL || tag == ERA || tag == REF || tag == U32);
+}
 
+static Term term_offset_loc(Term term, Loc offset) {
+  if (!term_has_loc(term)) { return term; }
   Loc loc = term_loc(term) + offset;
+  return term_with_loc(term, loc);
+}
 
-  return (term & 0xFFFFFFFF) | (((Term)loc) << 32);
+// This should only be called with BOOK Def nodes, which are always contiguous
+// and always have locs relative to the beginning of Def.nodes.
+static Term term_with_nloc(TM *tm, Term term, u32 nodes_len) {
+  if (!term_has_loc(term)) { return term; }
+  Loc loc = term_loc(term);
+  // TODO: Temporary sanity check.
+  #if 1 || defined(DEBUG)
+  if (/*loc < 1 || */loc > nodes_len) {
+    fprintf(stderr, "Invalid loc %u, nodes %u\n", loc, nodes_len);
+    exit(1);
+  }
+  #endif
+  return term_with_loc(term, tm->nloc[loc]);
 }
 
 static int mop_debug = 1; // memory operations
@@ -305,56 +337,116 @@ void set(Loc loc, Term term) {
   }
 }
 
-static u128 take_pair(Loc loc) {
-  //u128* buff = (u128*)&BUFF[loc];
-  return __atomic_exchange_n((u128*)&BUFF[loc], 0ULL, __ATOMIC_RELAXED);
+static Pair take_pair(Loc loc) {
+  return __atomic_exchange_n((Pair*)&BUFF[loc], 0ULL, __ATOMIC_RELAXED);
 }
 
-static void set_pair(Loc loc, u128 pair) {
-  //u128* buff = (u128*)&BUFF[loc];
-  __atomic_store_n((u128*)&BUFF[loc], pair, __ATOMIC_RELAXED);
+static void set_pair(Loc loc, Pair pair) {
+  __atomic_store_n((Pair*)&BUFF[loc], pair, __ATOMIC_RELAXED);
 }
 
-Loc port(u64 n, Loc x) { return n + x - 1; }
+static Loc port(u64 n, Loc loc) { return n + loc - 1; }
 
-// Allocation
-Loc alloc_node(u64 arity) {
-  Loc loc = atomic_fetch_add(&RNOD_END, arity);
-  return loc;
+// Allocator
+// ---------
+
+/*
+static u32 node_alloc_1(TM *tm) {
+  u32 att = 0; // attempts
+  while (1) {
+    // TODO: consider nput + npos, with npos resetting to 1, to eliminate modulo
+    Loc loc = tm->tid * NODE_LEN + (tm->nput % NODE_LEN);
+    Pair pair = *(Pair*)&BUFF[loc];
+    tm->nput += 2;
+    if (loc > 0 && pair == 0) { return loc; }
+    if (++att >= NODE_LEN / 2) {
+      fprintf(stderr, "Thread %u node space exhausted\n", tm->tid);
+      exit(EXIT_FAILURE);
+    }
+  }
+}
+*/
+
+static u32 node_alloc(TM *tm, u32 num) {
+  u32 got = 0;
+  u32 att = 0; // attempts
+  while (got < num) {
+    // TODO: this disables node recycling due to contiguous node requirement in
+    // interact_mat*.
+    if (tm->nput >= NODE_LEN) {
+      fprintf(stdout, "Thread %u node space exhausted (%u)\n", tm->tid, num);
+      exit(EXIT_FAILURE);
+    }
+
+    Loc loc = tm->tid * NODE_LEN + (tm->nput % NODE_LEN);
+    Pair pair = *(Pair*)&BUFF[loc];
+    tm->nput += 2;
+    if (loc > 0 && pair == 0) {
+      tm->nloc[got++] = loc;
+    }
+    #ifndef RECYCLE_NODES
+    else {
+      fprintf(stdout, "Non-zero node found with node recycling disabled!\n");
+      exit(EXIT_FAILURE);
+    }
+    #endif
+    // TODO: potential to not exit here and wait for var nodes to be zero'd
+    // and become available, but simplifying by treating as fatal for now.
+    if (++att >= NODE_LEN / 2) {
+      fprintf(stdout, "Thread %u node space exhausted (%u)\n", tm->tid, num);
+      exit(EXIT_FAILURE);
+    }
+  }
+  return got;
 }
 
-u64 inc_itr() {
-  return atomic_load(&RNOD_END) / 2;
-} 
-
-static u128 term_pair(Term neg, Term pos) {
-  return ((u128)pos << 64) | neg;
+// Gets the necessary resources for an interaction. Returns success.
+static inline bool get_resources(TM *tm, u32 need_rbag, u32 need_node) {
+  // with no HBAG implemented, treat RBAG exhaustion as fatal
+  u32 got_rbag = (RBAG_LEN - tm->rput) / 2;
+  if (got_rbag < need_rbag) {
+    fprintf(stderr, "Thread %u redex space exhausted\n", tm->tid);
+    exit(EXIT_FAILURE);
+  }
+  u32 got_node = node_alloc(tm, need_node);
+  return got_node >= need_node;
 }
 
-static u64 pair_pos(u128 pair) {
-  return (pair >> 64) & 0xFFFFFFFFFFFFFFFF;
+static void rbag_push(TM *tm, Term neg, Term pos) {
+  #if 1 || defined(DEBUG)
+  //bool free_local = tm->hput < HLEN;
+  bool free_global = tm->rput < RBAG_LEN - 1;
+  if (!free_global /* || !free_local*/) {
+    fprintf(stderr, "rbag space exhausted\n");
+    exit(1);
+  }
+  #endif
+
+  /*
+  if (is_high_priority(get_pair_rule(redex))) {
+    tm->hbag_buf[tm->hput++] = redex;
+  } else {
+  */
+  Loc loc = RBAG + tm->tid * RBAG_LEN + tm->rput;
+  set_pair(loc, pair_new(neg, pos));
+  tm->rput += 2;
+  //}
 }
 
-static u64 pair_neg(u128 pair) {
-  return pair & 0xFFFFFFFFFFFFFFFF;
+static Pair rbag_pop(TM* tm) {
+  /*if (tm->hput > 0) {
+    return tm->hbag_buf[--tm->hput];
+  } else */
+  if (tm->rput > 0) {
+    tm->rput -= 2;
+    return RBAG + tm->tid * RBAG_LEN + tm->rput;
+  } else {
+    return 0;
+  }
 }
 
-Loc rbag_push(Term neg, Term pos) {
-  // Atomically fetch and add to increment RBAG_END
-  // This ensures thread-safe allocation of a new location pair
-  u64 end = atomic_fetch_add(&RBAG_END, 2);
-
-  // Calculate the absolute location for this pair
-  Loc loc = RBAG + end;
-
-  // Store the negative and positive terms
-  set_pair(loc, term_pair(neg, pos));
-
-  // Return the location of the newly pushed pair
-  return loc;
-}
-
-Loc sequential_rbag_pop() {
+/*
+static Loc sequential_rbag_pop() {
   // Use atomic fetch_add to increment RBAG_INI atomically
   // This ensures thread-safe access to the reduction bag
   u64 ini = atomic_fetch_add(&RBAG_INI, 2);
@@ -370,8 +462,11 @@ Loc sequential_rbag_pop() {
   // ini represents the starting index of the location pair
   return RBAG + ini;
 }
+*/
 
-Loc parallel_rbag_pop() {
+static Loc parallel_rbag_pop(TM *tm) {
+  return 0;
+/*
   while (1) {
     // Check if there's an item available without modifying indices
     u64 start = atomic_load(&RBAG_INI); // TODO: relaxed?
@@ -397,24 +492,63 @@ Loc parallel_rbag_pop() {
     }
     // Another thread claimed those slots, try again
   }
+*/
 }
 
+// FFI functions
+void hvm_init() {
+  if (BUFF == NULL) {
+    BUFF = aligned_alloc(CLINE_BYTES, HEAP_SIZE);
+    if (BUFF == NULL) {
+      fprintf(stderr, "Heap memory allocation failed\n");
+      exit(EXIT_FAILURE);
+    }
+  }
+  memset(BUFF, 0, HEAP_SIZE);
+
+  alloc_static_tms();
+}
+
+void hvm_free() {
+  if (BUFF != NULL) {
+    free(BUFF);
+    BUFF = NULL;
+  }
+  free_static_tms();
+}
+
+Loc ffi_alloc_node(u64 arity) {
+  // Only called by Inject.hs. This is a special case of node allocation
+  // where we know nodes will be contiguous.
+  TM *tm = tms[0];
+  Loc loc = tm->nput;
+  tm->nput += arity;
+  return loc;
+}
+
+void ffi_rbag_push(Term neg, Term pos) {
+  rbag_push(tms[0], neg, pos);
+}
+
+u64 inc_itr() {
+  // TODO
+  return 0; // return atomic_load(&RNOD_END) / 2;
+} 
+
 Loc rbag_ini() {
-  // Atomically load the current initial index of the reduction bag
-  return RBAG + atomic_load(&RBAG_INI);
+  // TODO
+  return 0;  // RBAG + atomic_load(&RBAG_INI);
 }
 
 Loc rbag_end() {
-  // Atomically load the current end index of the reduction bag
-  return RBAG + atomic_load(&RBAG_END);
+  // TODO
+  return 0; // RBAG + atomic_load(&RBAG_END);
 }
 
 Loc rnod_end() {
-  // Atomically load the current end of the reduction nodes
-  return atomic_load(&RNOD_END);
+  // TODO
+  return 0; // atomic_load(&RNOD_END);
 }
-
-// Book operations
 
 // Moves the global buffer and redex bag into a new def and resets
 // the global buffer and redex bag.
@@ -429,8 +563,9 @@ void def_new(char *name) {
     BOOK.defs = realloc(BOOK.defs, sizeof(Def) * BOOK.cap);
   }
 
-  u64 rbag_end = atomic_load(&RBAG_END);
-  u64 rnod_end = atomic_load(&RNOD_END);
+  TM *tm = tms[0];
+  Loc rbag_end = tm->rput; // atomic_load(&RBAG_END);
+  Loc rnod_end = tm->nput; // atomic_load(&RNOD_END);
 
   Def def = {
       .name = name,
@@ -450,8 +585,7 @@ void def_new(char *name) {
   memset(BUFF, 0, sizeof(Term) * def.nodes_len);
   memset(BUFF + RBAG, 0, sizeof(Term) * def.rbag_len);
 
-  atomic_store(&RNOD_END, 0);
-  atomic_store(&RBAG_END, 0);
+  tm_reset(tm);
 
   BOOK.defs[BOOK.len] = def;
   BOOK.len++;
@@ -463,137 +597,109 @@ char *def_name(Loc def_idx) { return BOOK.defs[def_idx].name; }
 // offset by the index where in the BUFF it was expanded.
 //
 // Returns the ref's root, the first node in its data.
-
-Term expand_ref(Loc def_idx) {
-  // Check if buffer is initialized
-  if (RNOD_END == 0) {
-    printf("expand_ref: empty BUFF\n");
-    exit(1);
-  }
-
+static Term expand_ref(TM *tm, Loc def_idx) {
   // Get definition data
-  Def def = BOOK.defs[def_idx];
-  const u32 nodes_len = def.nodes_len;
-  const Term *nodes = def.nodes;
-  const Term *rbag = def.rbag;
-  const u32 rbag_len = def.rbag_len;
+  const Def* def = &BOOK.defs[def_idx];
+  const u32 nodes_len = def->nodes_len;
+  const Term *nodes = def->nodes;
+  const Term *rbag = def->rbag;
+  const u32 rbag_len = def->rbag_len;
 
-  // Allocate space in buffer atomically
-  u64 offset = atomic_fetch_add(&RNOD_END, nodes_len - 1) - 1;
-  Term root = term_offset_loc(nodes[0], offset);
+  // must occur before get_resources()
+  //a64 offset = atomic_fetch_add(&RNOD_END, nodes_len - 1) - 1;
+  u32 offset = tm->nput + nodes_len - 2;
 
-  if (offset + nodes_len >= RBAG + RBAG_INI) {
-    fprintf(stderr, "REF expansion exceeds RBAG_INI:%lu, offset:%lu, nodes_len:%u\n",
-           RBAG+RBAG_INI, offset, nodes_len);
+  // TODO: If this fails, the Ref term could be pushed back onto bag.
+  // For simplicity, exit for now.
+  if (!get_resources(tm, rbag_len, nodes_len - 1)) {
+    fprintf(stderr, "Thread %u node space exhausted, nodes %u\n",
+           tm->tid, nodes_len);
     exit(1);
   }
 
-  // Process nodes
-  if (nodes_len <= 32) {
-    // Small nodes array - process directly
-    for (u32 i = 1; i < nodes_len; i++) {
-      // Use atomic store for thread safety
-      atomic_store(&BUFF[offset + i], term_offset_loc(nodes[i], offset));
-    }
-  } else {
-    // Larger nodes array - use stack buffer
-    const int STACK_BUFFER_SIZE = 1024;
-    Term stack_buffer[STACK_BUFFER_SIZE];
+  // All nodes in a book def are contiguous and have zero-based locs, relative
+  // to the def's node array.
+  //
+  // Conversely, the nodes of an expanded ref may be dispersed, resulting in no
+  // fixed offset with which we can modify the locs of expanded terms.
+  //
+  // Instead, we must (potentially) set the loc of every expanded term to the
+  // relatively positioned loc reserved by get_resources() above, in tm->nloc.
+  #ifdef RECYCLE_NODES
+  Term root = term_with_nloc(tm, nodes[0], nodes_len);
+  #else
+  Term root = term_offset_loc(nodes[0], offset);
+  #endif
 
-    // Process nodes in chunks for better cache efficiency
-    const u32 CHUNK_SIZE = 64; // Align to typical cache line size
-
-    for (u32 chunk_start = 1; chunk_start < nodes_len;
-         chunk_start += CHUNK_SIZE) {
-      u32 chunk_end = (chunk_start + CHUNK_SIZE < nodes_len)
-                          ? chunk_start + CHUNK_SIZE
-                          : nodes_len;
-
-      if (chunk_end < nodes_len) {
-        __builtin_prefetch(&nodes[chunk_end], 0, 0);
-      }
-
-      // Process current chunk
-      for (u32 i = chunk_start; i < chunk_end; i++) {
-        Term offset_term = term_offset_loc(nodes[i], offset);
-        // Use atomic store instead of memcpy
-        atomic_store(&BUFF[offset + i], offset_term);
-      }
-    }
+  // No redexes reference these nodes yet; therefore, safe to add un-atomically.
+  for (u32 i = 1; i < nodes_len; i++) {
+    Loc loc = tm->nloc[i - 1];
+    #ifdef RECYCLE_NODES
+    BUFF[loc] = term_with_nloc(tm, nodes[i], nodes_len);
+    #else
+    BUFF[loc] = term_offset_loc(nodes[i], offset);
+    #endif
   }
 
-  // Process reference bag (always non-empty)
-  const int RBAG_STACK_SIZE = 128;
-  Term rbag_stack[RBAG_STACK_SIZE];
-
-  // Process reference bag in smaller batches to fit in stack
-  for (u32 batch_start = 0; batch_start < rbag_len;
-       batch_start += RBAG_STACK_SIZE) {
-    u32 batch_size = (batch_start + RBAG_STACK_SIZE < rbag_len)
-                         ? RBAG_STACK_SIZE
-                         : (rbag_len - batch_start);
-
-    // Prepare batch of rbag entries
-    for (u32 i = 0; i < batch_size; i++) {
-      u32 idx = batch_start + i;
-      if (idx + 16 < rbag_len) {
-        __builtin_prefetch(&rbag[idx + 16], 0, 0);
-      }
-      rbag_stack[i] = term_offset_loc(rbag[idx], offset);
-    }
-
-    // Push pairs to rbag
-    for (u32 i = 0; i < batch_size; i += 2) {
-      if (batch_start + i + 1 < rbag_len) { // Make sure we have a pair
-        rbag_push(rbag_stack[i], rbag_stack[i + 1]);
-      }
-    }
+  for (u32 i = 0; i < rbag_len; i += 2) {
+    #ifdef RECYCLE_NODES
+    Term neg = term_with_nloc(tm, rbag[i], nodes_len);
+    Term pos = term_with_nloc(tm, rbag[i + 1], nodes_len);
+    #else
+    Term neg = term_offset_loc(rbag[i], offset);
+    Term pos = term_offset_loc(rbag[i + 1], offset);
+    #endif
+    rbag_push(tm, neg, pos);
   }
-
   return root;
 }
 
 // Atomic Linker
-static inline void move(Loc neg_loc, u64 pos);
+static inline void move(TM *tm, Loc neg_loc, u64 pos);
 
-static inline void link_terms(Term neg, Term pos) {
+static inline void link_terms(TM *tm, Term neg, Term pos) {
   if (term_tag(pos) == VAR) {
     Term far = swap(term_loc(pos), neg);
     if (term_tag(far) != SUB) {
-      move(term_loc(pos), far);
+      move(tm, term_loc(pos), far);
     }
   } else {
-    rbag_push(neg, pos);
+    rbag_push(tm, neg, pos);
   }
 }
 
-static inline void move(Loc neg_loc, Term pos) {
+static inline void move(TM *tm, Loc neg_loc, Term pos) {
   Term neg = swap(neg_loc, pos);
   if (term_tag(neg) != SUB) {
     // No need to take() since we already swapped
-    link_terms(neg, pos);
+    link_terms(tm, neg, pos);
   }
 }
 
 // Interactions
-static void interact_applam(Loc a_loc, Loc b_loc) {
+static void interact_applam(TM *tm, Loc a_loc, Loc b_loc) {
   Term arg = take(port(1, a_loc));
   Loc ret = port(2, a_loc);
   Loc var = port(1, b_loc);
   Term bod = take(port(2, b_loc));
-  move(var, arg);
-  move(ret, bod);
+  move(tm, var, arg);
+  move(tm, ret, bod);
 }
 
-static void interact_appsup(Loc a_loc, Loc b_loc) {
+static void interact_appsup(TM *tm, Loc a_loc, Loc b_loc) {
+  // TODO: recoverable
+  if (!get_resources(tm, 0, 4)) {
+    fprintf(stderr, "i_appsup: Thread %u node space exhausted\n", tm->tid);
+    exit(1);
+  }
   Term arg = take(port(1, a_loc));
   Loc ret = port(2, a_loc);
   Term tm1 = take(port(1, b_loc));
   Term tm2 = take(port(2, b_loc));
-  Loc dp1 = alloc_node(2);
-  Loc dp2 = alloc_node(2);
-  Loc cn1 = alloc_node(2);
-  Loc cn2 = alloc_node(2);
+  Loc dp1 = tm->nloc[0];
+  Loc dp2 = tm->nloc[1];
+  Loc cn1 = tm->nloc[2];
+  Loc cn2 = tm->nloc[3];
   set(port(1, dp1), term_new(SUB, 0, 0));
   set(port(2, dp1), term_new(SUB, 0, 0));
   set(port(1, dp2), term_new(VAR, 0, port(2, cn1)));
@@ -602,47 +708,52 @@ static void interact_appsup(Loc a_loc, Loc b_loc) {
   set(port(2, cn1), term_new(SUB, 0, 0));
   set(port(1, cn2), term_new(VAR, 0, port(2, dp1)));
   set(port(2, cn2), term_new(SUB, 0, 0));
-  link_terms(term_new(DUP, 0, dp1), arg);
-  move(ret, term_new(SUP, 0, dp2));
-  link_terms(term_new(APP, 0, cn1), tm1);
-  link_terms(term_new(APP, 0, cn2), tm2);
+  link_terms(tm, term_new(DUP, 0, dp1), arg);
+  move(tm, ret, term_new(SUP, 0, dp2));
+  link_terms(tm, term_new(APP, 0, cn1), tm1);
+  link_terms(tm, term_new(APP, 0, cn2), tm2);
 }
 
-static void interact_appnul(Loc a_loc) {
+static void interact_appnul(TM *tm, Loc a_loc) {
   Term arg = take(port(1, a_loc));
   Loc ret = port(2, a_loc);
-  link_terms(term_new(ERA, 0, 0), arg);
-  move(ret, term_new(NUL, 0, 0));
+  link_terms(tm, term_new(ERA, 0, 0), arg);
+  move(tm, ret, term_new(NUL, 0, 0));
 }
 
-static void interact_appu32(Loc a_loc, u32 num) {
+static void interact_appu32(TM *tm, Loc a_loc, u32 num) {
   Term arg = take(port(1, a_loc));
   Loc ret = port(2, a_loc);
-  link_terms(term_new(U32, 0, num), arg);
-  move(ret, term_new(U32, 0, num));
+  link_terms(tm, term_new(U32, 0, num), arg);
+  move(tm, ret, term_new(U32, 0, num));
 }
 
-static void interact_opxnul(Loc a_loc) {
+static void interact_opxnul(TM *tm, Loc a_loc) {
   Term arg = take(port(1, a_loc));
   Loc ret = port(2, a_loc);
-  link_terms(term_new(ERA, 0, 0), arg);
-  move(ret, term_new(NUL, 0, 0));
+  link_terms(tm, term_new(ERA, 0, 0), arg);
+  move(tm, ret, term_new(NUL, 0, 0));
 }
 
-static void interact_opxnum(Loc a_loc, Lab op, u32 num, Tag num_type) {
+static void interact_opxnum(TM *tm, Loc a_loc, Lab op, u32 num, Tag num_type) {
   Term arg = swap(port(1, a_loc), term_new(num_type, 0, num));
-  link_terms(term_new(OPY, op, a_loc), arg);
+  link_terms(tm, term_new(OPY, op, a_loc), arg);
 }
 
-static void interact_opxsup(Loc a_loc, Lab op, Loc b_loc) {
+static void interact_opxsup(TM *tm, Loc a_loc, Lab op, Loc b_loc) {
+  // TODO: recoverable
+  if (!get_resources(tm, 0, 4)) {
+    fprintf(stderr, "i_opxsup: Thread %u node space exhausted\n", tm->tid);
+    exit(1);
+  }
   Term arg = take(port(1, a_loc));
   Loc ret = port(2, a_loc);
   Term tm1 = take(port(1, b_loc));
   Term tm2 = take(port(2, b_loc));
-  Loc dp1 = alloc_node(2);
-  Loc dp2 = alloc_node(2);
-  Loc cn1 = alloc_node(2);
-  Loc cn2 = alloc_node(2);
+  Loc dp1 = tm->nloc[0];
+  Loc dp2 = tm->nloc[1];
+  Loc cn1 = tm->nloc[2];
+  Loc cn2 = tm->nloc[3];
   set(port(1, dp1), term_new(SUB, 0, 0));
   set(port(2, dp1), term_new(SUB, 0, 0));
   set(port(1, dp2), term_new(VAR, 0, port(2, cn1)));
@@ -651,17 +762,17 @@ static void interact_opxsup(Loc a_loc, Lab op, Loc b_loc) {
   set(port(2, cn1), term_new(SUB, 0, 0));
   set(port(1, cn2), term_new(VAR, 0, port(2, dp1)));
   set(port(2, cn2), term_new(SUB, 0, 0));
-  link_terms(term_new(DUP, 0, dp1), arg);
-  move(ret, term_new(SUP, 0, dp2));
-  link_terms(term_new(OPX, op, cn1), tm1);
-  link_terms(term_new(OPX, op, cn2), tm2);
+  link_terms(tm, term_new(DUP, 0, dp1), arg);
+  move(tm, ret, term_new(SUP, 0, dp2));
+  link_terms(tm, term_new(OPX, op, cn1), tm1);
+  link_terms(tm, term_new(OPX, op, cn2), tm2);
 }
 
-static void interact_opynul(Loc a_loc) {
+static void interact_opynul(TM *tm, Loc a_loc) {
   Term arg = take(port(1, a_loc));
   Loc ret = port(2, a_loc);
-  link_terms(term_new(ERA, 0, 0), arg);
-  move(ret, term_new(NUL, 0, 0));
+  link_terms(tm, term_new(ERA, 0, 0), arg);
+  move(tm, ret, term_new(NUL, 0, 0));
 }
 
 // Safer Utilities
@@ -691,7 +802,7 @@ u32 f32_to_u32(f32 f) {
   return converter.u;
 }
 
-static void interact_opynum(Loc a_loc, Lab op, u32 y, Tag y_type) {
+static void interact_opynum(TM *tm, Loc a_loc, Lab op, u32 y, Tag y_type) {
   u32 x = term_loc(take(port(1, a_loc)));
   Loc ret = port(2, a_loc);
   u32 res = 0;
@@ -865,18 +976,23 @@ static void interact_opynum(Loc a_loc, Lab op, u32 y, Tag y_type) {
     }
     }
   }
-  move(ret, term_new(y_type, 0, res));
+  move(tm, ret, term_new(y_type, 0, res));
 }
 
-static void interact_opysup(Loc a_loc, Loc b_loc) {
+static void interact_opysup(TM *tm, Loc a_loc, Loc b_loc) {
+  // TODO: recoverable
+  if (!get_resources(tm, 0, 4)) {
+    fprintf(stderr, "i_appsup: Thread %u node space exhausted\n", tm->tid);
+    exit(1);
+  }
   Term arg = take(port(1, a_loc));
   Loc ret = port(2, a_loc);
   Term tm1 = take(port(1, b_loc));
   Term tm2 = take(port(2, b_loc));
-  Loc dp1 = alloc_node(2);
-  Loc dp2 = alloc_node(2);
-  Loc cn1 = alloc_node(2);
-  Loc cn2 = alloc_node(2);
+  Loc dp1 = tm->nloc[0];
+  Loc dp2 = tm->nloc[1];
+  Loc cn1 = tm->nloc[2];
+  Loc cn2 = tm->nloc[3];
   set(port(1, dp1), term_new(SUB, 0, 0));
   set(port(2, dp1), term_new(SUB, 0, 0));
   set(port(1, dp2), term_new(VAR, 0, port(2, cn1)));
@@ -885,31 +1001,36 @@ static void interact_opysup(Loc a_loc, Loc b_loc) {
   set(port(2, cn1), term_new(SUB, 0, 0));
   set(port(1, cn2), term_new(VAR, 0, port(2, dp1)));
   set(port(2, cn2), term_new(SUB, 0, 0));
-  link_terms(term_new(DUP, 0, dp1), arg);
-  move(ret, term_new(SUP, 0, dp2));
-  link_terms(term_new(OPY, 0, cn1), tm1);
-  link_terms(term_new(OPY, 0, cn2), tm2);
+  link_terms(tm, term_new(DUP, 0, dp1), arg);
+  move(tm, ret, term_new(SUP, 0, dp2));
+  link_terms(tm, term_new(OPY, 0, cn1), tm1);
+  link_terms(tm, term_new(OPY, 0, cn2), tm2);
 }
 
-static void interact_dupsup(Loc a_loc, Loc b_loc) {
+static void interact_dupsup(TM *tm, Loc a_loc, Loc b_loc) {
   Loc dp1 = port(1, a_loc);
   Loc dp2 = port(2, a_loc);
   Term tm1 = take(port(1, b_loc));
   Term tm2 = take(port(2, b_loc));
-  move(dp1, tm1);
-  move(dp2, tm2);
+  move(tm, dp1, tm1);
+  move(tm, dp2, tm2);
 }
 
-static void interact_duplam(Loc a_loc, Loc b_loc) {
+static void interact_duplam(TM *tm, Loc a_loc, Loc b_loc) {
+  // TODO: recoverable
+  if (!get_resources(tm, 0, 4)) {
+    fprintf(stderr, "i_appsup: Thread %u node space exhausted\n", tm->tid);
+    exit(1);
+  }
   Loc dp1 = port(1, a_loc);
   Loc dp2 = port(2, a_loc);
   Loc var = port(1, b_loc);
   // TODO(enricozb): why is this the only take?
   Term bod = take(port(2, b_loc));
-  Loc co1 = alloc_node(2);
-  Loc co2 = alloc_node(2);
-  Loc du1 = alloc_node(2);
-  Loc du2 = alloc_node(2);
+  Loc co1 = tm->nloc[0];
+  Loc co2 = tm->nloc[1];
+  Loc du1 = tm->nloc[2];
+  Loc du2 = tm->nloc[3];
   set(port(1, co1), term_new(SUB, 0, 0));
   set(port(2, co1), term_new(VAR, 0, port(1, du2)));
   set(port(1, co2), term_new(SUB, 0, 0));
@@ -918,67 +1039,89 @@ static void interact_duplam(Loc a_loc, Loc b_loc) {
   set(port(2, du1), term_new(VAR, 0, port(1, co2)));
   set(port(1, du2), term_new(SUB, 0, 0));
   set(port(2, du2), term_new(SUB, 0, 0));
-  move(dp1, term_new(LAM, 0, co1));
-  move(dp2, term_new(LAM, 0, co2));
-  move(var, term_new(SUP, 0, du1));
-  link_terms(term_new(DUP, 0, du2), bod);
+  move(tm, dp1, term_new(LAM, 0, co1));
+  move(tm, dp2, term_new(LAM, 0, co2));
+  move(tm, var, term_new(SUP, 0, du1));
+  link_terms(tm, term_new(DUP, 0, du2), bod);
 }
 
-static void interact_dupnul(Loc a_loc) {
+static void interact_dupnul(TM *tm, Loc a_loc) {
   Loc dp1 = port(1, a_loc);
   Loc dp2 = port(2, a_loc);
-  move(dp1, term_new(NUL, 0, a_loc));
-  move(dp2, term_new(NUL, 0, a_loc));
+  move(tm, dp1, term_new(NUL, 0, a_loc));
+  move(tm, dp2, term_new(NUL, 0, a_loc));
 }
 
-static void interact_dupnum(Loc a_loc, u32 n, Tag n_type) {
+static void interact_dupnum(TM *tm, Loc a_loc, u32 n, Tag n_type) {
   Loc dp1 = port(1, a_loc);
   Loc dp2 = port(2, a_loc);
-  move(dp1, term_new(n_type, 0, n));
-  move(dp2, term_new(n_type, 0, n));
+  move(tm, dp1, term_new(n_type, 0, n));
+  move(tm, dp2, term_new(n_type, 0, n));
 }
 
-static void interact_dupref(Loc a_loc, Loc b_loc) {
-  move(port(1, a_loc), term_new(REF, 0, b_loc));
-  move(port(2, a_loc), term_new(REF, 0, b_loc));
+static void interact_dupref(TM *tm, Loc a_loc, Loc b_loc) {
+  move(tm, port(1, a_loc), term_new(REF, 0, b_loc));
+  move(tm, port(2, a_loc), term_new(REF, 0, b_loc));
 }
 
-static void interact_matnul(Loc a_loc, Lab mat_len) {
-  move(port(1, a_loc), term_new(NUL, 0, 0));
+static void interact_matnul(TM *tm, Loc a_loc, Lab mat_len) {
+  fprintf(stderr, "interact_matnul not supported (yet)\n");
+  exit(1);
+/*
+  move(tm, port(1, a_loc), term_new(NUL, 0, 0));
   for (u32 i = 0; i < mat_len; i++) {
-    link_terms(term_new(ERA, 0, 0), take(port(i + 2, a_loc)));
+    // TODO: problematic port() usage
+    link_terms(tm, term_new(ERA, 0, 0), take(port(i + 2, a_loc)));
   }
+*/
 }
 
-static void interact_matnum(Loc mat_loc, Lab mat_len, u32 n, Tag n_type) {
+static void interact_matnum(TM *tm, Loc mat_loc, Lab mat_len, u32 n, Tag n_type) {
   if (n_type != U32) {
-    printf("match with non-U32\n");
+    fprintf(stderr, "match with non-U32\n");
     exit(1);
   }
 
   u32 i_arm = (n < mat_len - 1) ? n : (mat_len - 1);
   for (u32 i = 0; i < mat_len; i++) {
     if (i != i_arm) {
-      link_terms(term_new(ERA, 0, 0), take(port(2 + i, mat_loc)));
+      // TODO: problematic port() usage
+      link_terms(tm, term_new(ERA, 0, 0), take(port(2 + i, mat_loc)));
     }
   }
 
   Loc ret = port(1, mat_loc);
+  // TODO: problematic port() usage
   Term arm = take(port(2 + i_arm, mat_loc));
 
   if (i_arm < mat_len - 1) {
-    move(ret, arm);
+    move(tm, ret, arm);
   } else {
-    Loc app = alloc_node(2);
+    // REVIEW: using get_resources() here instead of node_alloc_1() because upon
+    // review there may be a minimum # of redex spots required as well.
+    // TODO: recoverable
+    if (!get_resources(tm, 0, 1)) {
+      fprintf(stderr, "i_matnum: Thread %u node space exhausted\n", tm->tid);
+      exit(1);
+    }
+    Loc app = tm->nloc[0];
     set(app + 0, term_new(U32, 0, n - (mat_len - 1)));
     set(app + 1, term_new(SUB, 0, 0));
-    move(ret, term_new(VAR, 0, port(2, app)));
+    move(tm, ret, term_new(VAR, 0, port(2, app)));
 
-    link_terms(term_new(APP, 0, app), arm);
+    link_terms(tm, term_new(APP, 0, app), arm);
   }
 }
 
-static void interact_matsup(Loc mat_loc, Lab mat_len, Loc sup_loc) {
+static void interact_matsup(TM *tm, Loc mat_loc, Lab mat_len, Loc sup_loc) {
+  fprintf(stderr, "interact_matsup not supported (yet)\n");
+  exit(1);
+/*
+  // TODO: recoverable
+  if (!get_resources(tm, 0, 2 + mat_len * 3)) {
+    fprintf(stderr, "i_appsup: Thread %u node space exhausted\n", tm->tid);
+    exit(1);
+  }
   Loc ma0 = alloc_node(1 + mat_len);
   Loc ma1 = alloc_node(1 + mat_len);
 
@@ -993,34 +1136,38 @@ static void interact_matsup(Loc mat_loc, Lab mat_len, Loc sup_loc) {
     Loc dui = alloc_node(2);
     set(port(1, dui), term_new(SUB, 0, 0));
     set(port(2, dui), term_new(SUB, 0, 0));
+    // TODO: this is problematic. it requires i+mat_len nodes to be contiguous.
+    // Can probably weasel around it by implementing a port_nloc() that uses
+    // locs reserved by get_resources() in tm->nloc. Punting for now.
     set(port(2 + i, ma0), term_new(VAR, 0, port(2, dui)));
     set(port(2 + i, ma1), term_new(VAR, 0, port(1, dui)));
 
-    link_terms(term_new(DUP, 0, dui), take(port(2 + i, mat_loc)));
+    link_terms(tm, term_new(DUP, 0, dui), take(port(2 + i, mat_loc)));
   }
 
-  move(port(1, mat_loc), term_new(SUP, 0, sup));
-  link_terms(term_new(MAT, mat_len, ma0), take(port(2, sup_loc)));
-  link_terms(term_new(MAT, mat_len, ma1), take(port(1, sup_loc)));
+  move(tm, port(1, mat_loc), term_new(SUP, 0, sup));
+  link_terms(tm, term_new(MAT, mat_len, ma0), take(port(2, sup_loc)));
+  link_terms(tm, term_new(MAT, mat_len, ma1), take(port(1, sup_loc)));
+*/
 }
 
-static void interact_eralam(Loc b_loc) {
+static void interact_eralam(TM *tm, Loc b_loc) {
   Loc var = port(1, b_loc);
   Term bod = take(port(2, b_loc));
-  move(var, term_new(NUL, 0, 0));
-  link_terms(term_new(ERA, 0, 0), bod);
+  move(tm, var, term_new(NUL, 0, 0));
+  link_terms(tm, term_new(ERA, 0, 0), bod);
 }
 
-static void interact_erasup(Loc b_loc) {
+static void interact_erasup(TM *tm, Loc b_loc) {
   Term tm1 = take(port(1, b_loc));
   Term tm2 = take(port(2, b_loc));
-  link_terms(term_new(ERA, 0, 0), tm1);
-  link_terms(term_new(ERA, 0, 0), tm2);
+  link_terms(tm, term_new(ERA, 0, 0), tm1);
+  link_terms(tm, term_new(ERA, 0, 0), tm2);
 }
 
 static char *tag_to_str(Tag tag);
 
-static void interact(Term neg, Term pos) {
+static void interact(TM *tm, Term neg, Term pos) {
   Tag neg_tag = term_tag(neg);
   Tag pos_tag = term_tag(pos);
   Loc neg_loc = term_loc(neg);
@@ -1030,19 +1177,18 @@ static void interact(Term neg, Term pos) {
   case APP:
     switch (pos_tag) {
     case LAM:
-      interact_applam(neg_loc, pos_loc);
-      break;
+      interact_applam(tm, neg_loc, pos_loc); break;
     case NUL:
-      interact_appnul(neg_loc);
+      interact_appnul(tm, neg_loc);
       break;
     case U32:
-      interact_appu32(neg_loc, pos_loc);
+      interact_appu32(tm, neg_loc, pos_loc);
       break;
     case REF:
-      link_terms(neg, expand_ref(pos_loc));
+      link_terms(tm, neg, expand_ref(tm, pos_loc));
       break;
     case SUP:
-      interact_appsup(neg_loc, pos_loc);
+      interact_appsup(tm, neg_loc, pos_loc);
       break;
     }
     break;
@@ -1051,18 +1197,18 @@ static void interact(Term neg, Term pos) {
     case LAM:
       break;
     case NUL:
-      interact_opxnul(neg_loc);
+      interact_opxnul(tm, neg_loc);
       break;
     case U32:
     case I32:
     case F32:
-      interact_opxnum(neg_loc, term_lab(neg), pos_loc, pos_tag);
+      interact_opxnum(tm, neg_loc, term_lab(neg), pos_loc, pos_tag);
       break;
     case REF:
-      link_terms(neg, expand_ref(pos_loc));
+      link_terms(tm, neg, expand_ref(tm, pos_loc));
       break;
     case SUP:
-      interact_opxsup(neg_loc, term_lab(neg), pos_loc);
+      interact_opxsup(tm, neg_loc, term_lab(neg), pos_loc);
       break;
     }
     break;
@@ -1071,41 +1217,41 @@ static void interact(Term neg, Term pos) {
     case LAM:
       break;
     case NUL:
-      interact_opynul(neg_loc);
+      interact_opynul(tm, neg_loc);
       break;
     case U32:
     case I32:
     case F32:
-      interact_opynum(neg_loc, term_lab(neg), pos_loc, pos_tag);
+      interact_opynum(tm, neg_loc, term_lab(neg), pos_loc, pos_tag);
       break;
     case REF:
-      link_terms(neg, expand_ref(pos_loc));
+      link_terms(tm, neg, expand_ref(tm, pos_loc));
       break;
     case SUP:
-      interact_opysup(neg_loc, pos_loc);
+      interact_opysup(tm, neg_loc, pos_loc);
       break;
     }
     break;
   case DUP:
     switch (pos_tag) {
     case LAM:
-      interact_duplam(neg_loc, pos_loc);
+      interact_duplam(tm, neg_loc, pos_loc);
       break;
     case NUL:
-      interact_dupnul(neg_loc);
+      interact_dupnul(tm, neg_loc);
       break;
     case U32:
     case I32:
     case F32:
-      interact_dupnum(neg_loc, pos_loc, pos_tag);
+      interact_dupnum(tm, neg_loc, pos_loc, pos_tag);
       break;
     // TODO(enricozb): dup-ref optimization
     case REF:
-      interact_dupref(neg_loc, pos_loc);
+      interact_dupref(tm, neg_loc, pos_loc);
       break;
-    // case REF: link_terms(neg, expand_ref(pos_loc)); break;
+    // case REF: link_terms(tm, neg, expand_ref(pos_loc)); break;
     case SUP:
-      interact_dupsup(neg_loc, pos_loc);
+      interact_dupsup(tm, neg_loc, pos_loc);
       break;
     }
     break;
@@ -1114,25 +1260,25 @@ static void interact(Term neg, Term pos) {
     case LAM:
       break;
     case NUL:
-      interact_matnul(neg_loc, term_lab(neg));
+      interact_matnul(tm, neg_loc, term_lab(neg));
       break;
     case U32:
     case I32:
     case F32:
-      interact_matnum(neg_loc, term_lab(neg), pos_loc, pos_tag);
+      interact_matnum(tm, neg_loc, term_lab(neg), pos_loc, pos_tag);
       break;
     case REF:
-      link_terms(neg, expand_ref(pos_loc));
+      link_terms(tm, neg, expand_ref(tm, pos_loc));
       break;
     case SUP:
-      interact_matsup(neg_loc, term_lab(neg), pos_loc);
+      interact_matsup(tm, neg_loc, term_lab(neg), pos_loc);
       break;
     }
     break;
   case ERA:
     switch (pos_tag) {
     case LAM:
-      interact_eralam(pos_loc);
+      interact_eralam(tm, pos_loc);
       break;
     case NUL:
       break;
@@ -1141,91 +1287,70 @@ static void interact(Term neg, Term pos) {
     case REF:
       break;
     case SUP:
-      interact_erasup(pos_loc);
+      interact_erasup(tm, pos_loc);
       break;
     }
     break;
   }
 }
 
-static inline int sequential_step() {
-  Loc loc = sequential_rbag_pop();
+static inline int sequential_step(TM* tm) {
+  Loc loc = /*sequential_*/rbag_pop(tm);
 
   if (loc == 0) {
     return 0;
   }
 
-  Term neg = take(loc);
-  Term pos = take(loc + 1);
-  interact(neg, pos);
+  Pair pair = take_pair(loc);
+  //Term neg = take(loc);
+  //Term pos = take(loc + 1);
+  interact(tm, pair_neg(pair), pair_pos(pair));
 
   return 1;
 }
 
-static void* parallel_step(void*) {
+static void* parallel_step(void* arg) {
+  int tid = *(int*)arg;
+  TM *tm = tms[tid];
   while (1) {
-    Loc loc = parallel_rbag_pop();
+    Loc loc = parallel_rbag_pop(tm);
     if (loc == 0) {
       return NULL;
     }
     // As RBAG_END is incremented prior to term(s) being written, there is a
     // race condition where another thread may read 0ULL from that location.
     while (1) {
-      u128 pair = take_pair(loc);
+      Pair pair = take_pair(loc);
       if (pair > 0ULL) {
-        interact(pair_neg(pair), pair_pos(pair));
+        interact(tm, pair_neg(pair), pair_pos(pair));
         break;
       }
-      YIELD();
+      //YIELD();
     }
   }
   return (void*)1;
 }
 
-void hvm_init() {
-  const u64 BUFF_SIZE = BUFF_CNT * sizeof(u64);
-  if (BUFF == NULL) {
-    BUFF = aligned_alloc(64, BUFF_SIZE);
-    if (BUFF == NULL) {
-      fprintf(stderr, "Memory allocation failed\n");
-      exit(EXIT_FAILURE);
-    }
-  }
-  memset(BUFF, 0, BUFF_SIZE);
-
-  atomic_store(&RNOD_INI, 0);
-  atomic_store(&RNOD_END, 0);
-  atomic_store(&RBAG_INI, 0);
-  atomic_store(&RBAG_END, 0);
-}
-
-void hvm_free() {
-  if (BUFF != NULL) {
-    free(BUFF);
-    BUFF = NULL;
-  }
-}
-
-void boot(Loc def_idx) {
-  if (RNOD_END || RBAG_END) {
-    printf("booting on non-empty state\n");
+static void boot(Loc def_idx) {
+  TM *tm = tms[0];
+  if (tm->nput > 2 || tm->rput > 0) {
+    fprintf(stderr, "booting on non-empty state\n");
     exit(1);
   }
-
-  Loc root = alloc_node(1);
-  set(root, expand_ref(def_idx));
+  Loc root = 0;
+  set(root, expand_ref(tm, def_idx));
 }
 
 static void parallel_normalize() {
-  thread_t threads[MAX_THREADS];
-  int thread_ids[MAX_THREADS];
+  thread_t threads[TPC];
+  int thread_ids[TPC];
 
-  for (int i = 0; i < MAX_THREADS; i++) {
+  for (int i = 0; i < TPC; i++) {
     thread_ids[i] = i;
     int rc = thread_create(&threads[i], NULL, parallel_step, &thread_ids[i]);
   }
 
-  for (int i = 0; i < MAX_THREADS; i++) {
+  for (int i = 0; i < TPC; i++) {
     thread_join(threads[i], NULL);
   }
 }
@@ -1238,13 +1363,16 @@ Term normalize(Term term) {
 
   boot(term_loc(term));
 
-  if (MAX_THREADS == 1) {
-    while (sequential_step())
+  if (TPC == 1) {
+    while (sequential_step(tms[0]))
       ;
   } else {
     parallel_normalize();
   }
-    
+
+  dump_term(133);
+  dump_buff(tms[0]);
+
   return get(0);
 }
 
@@ -1289,6 +1417,47 @@ static char *tag_to_str(Tag tag) {
   }
 }
 
+/*
+static char *itr_str(u32 itr) {
+  static char buf[16];
+  switch(itr) {
+  case I_APPLAM: return "APPLAM";
+  case I_APPNUL: return "APPNUL";
+  case I_APPU32: return "APPU32";
+  case I_APPREF: return "APPREF";
+  case I_APPSUP: return "APPSUP";
+  case I_DUPLAM: return "DUPLAM";
+  case I_DUPNUL: return "DUPNUL";
+  case I_DUPNUM: return "DUPNUM";
+  case I_DUPREF: return "DUPREF";
+  case I_DUPSUP: return "DUPSUP";
+  case I_MATLAM: return "MATLAM";
+  case I_MATNUL: return "MATNUL";
+  case I_MATNUM: return "MATNUM";
+  case I_MATREF: return "MATREF";
+  case I_MATSUP: return "MATSUP";
+  case I_OPXNUL: return "OPXNUL";
+  case I_OPXNUM: return "OPXNUM";
+  case I_OPXREF: return "OPXREF";
+  case I_OPXSUP: return "OPXSUP";
+  case I_OPYNUL: return "OPYNUL";
+  case I_OPYNUM: return "OPYNUM";
+  case I_OPYREF: return "OPYREF";
+  case I_OPYSUP: return "OPYSUP";
+  case I_ERALAM: return "ERALAM";
+  case I_ERASUP: return "ERASUP";
+  case TAKENEXT: return "_TAKE_";
+  default: return "I_????";
+  }
+}
+*/
+
+void dump_term(Loc loc) {
+  Term term = get(loc);
+  printf("%06X %03X %03X %s\n", loc, term_loc(term), term_lab(term),
+      tag_to_str(term_tag(term)));
+}
+
 // FILE VERSION: (or you can >> the stdio into a file)
 /*void dump_buff() {*/
 /*  FILE *file = fopen("multi.txt", "w");*/
@@ -1330,30 +1499,27 @@ static char *tag_to_str(Tag tag) {
 /*  fclose(file);*/
 /*}*/
 // STD VERSION
-void dump_buff() {
+void dump_buff(TM *tm) {
   printf("------------------\n");
   printf("      NODES\n");
   printf("ADDR   LOC LAB TAG\n");
   printf("------------------\n");
-  for (Loc loc = RNOD_INI; loc < RNOD_END; loc++) {
+  for (Loc idx = 0; idx < tm->nput; idx++) {
+    Loc loc = tm->tid * NODE_LEN + idx;
+    dump_term(loc);
+/*
     Term term = get(loc);
-    Loc t_loc = term_loc(term);
-    Lab t_lab = term_lab(term);
-    Tag t_tag = term_tag(term);
     printf("%06X %03X %03X %s\n", loc, term_loc(term), term_lab(term),
-           tag_to_str(term_tag(term)));
+        tag_to_str(term_tag(term)));
+*/
   }
   printf("------------------\n");
   printf("    REDEX BAG\n");
   printf("ADDR   LOC LAB TAG\n");
   printf("------------------\n");
-  for (Loc loc = RBAG + RBAG_INI; loc < RBAG + RBAG_END; loc++) {
-    Term term = get(loc);
-    Loc t_loc = term_loc(term);
-    Lab t_lab = term_lab(term);
-    Tag t_tag = term_tag(term);
-    printf("%06X %03X %03X %s\n", loc, term_loc(term), term_lab(term),
-           tag_to_str(term_tag(term)));
+  for (Loc idx = 0; idx < tm->rput; idx++) {
+    Loc loc = RBAG + tm->tid * RBAG_LEN + idx;
+    dump_term(loc);
   }
   printf("------------------\n");
 }

@@ -32,6 +32,7 @@ extractPCore term = case termTag term of
   U32 -> return $ PU32 (termLoc term)
   I32 -> return $ PI32 (word32ToInt32 $ termLoc term)
   F32 -> return $ PF32 (word32ToFloat $ termLoc term)
+  tag -> error $ "extractPCore: unhandled case: " ++ show tag
 
 -- Convert a term in memory to a NCore.
 -- The optional location is the location of the term

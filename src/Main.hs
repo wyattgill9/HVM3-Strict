@@ -50,11 +50,9 @@ cliRun filePath showStats = do
   end <- getTime Monotonic
     
   net <- extractNet term
-
   putStrLn $ netToString net
 
   when showStats $ do
-    -- end <- getCPUTime
     let timeInMs = fromIntegral (toNanoSecs (diffTimeSpec end start)) / 1000000 :: Double
     itr <- incItr
     len <- rnodEnd
