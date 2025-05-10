@@ -7,9 +7,7 @@ import Type
 -- ------------
 
 extractPCore :: Term -> IO PCore
-extractPCore term = do
-  putStrLn $ "extractPCore: " ++ show (termTag term)
-  case termTag term of
+extractPCore term = case termTag term of
     VAR -> do
       got <- get (termLoc term)
       extractVar (termLoc term) got
@@ -40,9 +38,7 @@ extractPCore term = do
 -- The optional location is the location of the term
 -- being extracted in the buffer.
 extractNCore :: Loc -> Term -> IO NCore
-extractNCore loc term = do
-  putStrLn $ "extractNCore: " ++ show (termTag term)
-  case termTag term of
+extractNCore loc term = case termTag term of
     ERA -> return NEra
     SUB -> return $ NSub ("v" ++ show loc)
     APP -> do
@@ -112,7 +108,6 @@ extractBag (loc:locs) = do
 
 extractNet :: Term -> IO Net
 extractNet root = do
-  putStrLn $ "extractNet: " ++ show (termLoc root)
   root' <- extractPCore root
   ini   <- rbagIni
   end   <- rbagEnd
