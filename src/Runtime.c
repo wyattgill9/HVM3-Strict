@@ -189,7 +189,7 @@ static TM *tms[TPC];
 static char *tag_to_str(Tag tag);
 static char *itr_str(u32 itr);
 void dump_term(Loc loc);
-void dump_buff();
+void dump_buff(TM *tm);
 
 // TM operations
 void tm_reset(TM *tm) {
@@ -197,16 +197,16 @@ void tm_reset(TM *tm) {
   tm->rput = 0;
   //tm->hput = 0;
   tm->sidx = 0;
+  tm->itrs = 0;
 }
 
 TM *tm_new(u64 tid) {
-  TM *tm = aligned_alloc(CLINE_BYTES, sizeof(TM));
+  TM *tm = malloc(sizeof(TM));
   if (tm == NULL) {
     fprintf(stderr, "TM memory allocation failed\n");
     exit(EXIT_FAILURE);
   }
   tm->tid = tid;
-  tm->itrs = 0;
   tm_reset(tm);
   return tm;
 }
@@ -340,7 +340,7 @@ Term take(Loc loc) {
 }
 
 void set(Loc loc, Term term) {
-  atomic_store_explicit(&BUFF[loc], term, memory_order_relaxed);
+  atomic_store_explicit((a64*)&BUFF[loc], term, memory_order_relaxed);
 
   if (mop_debug && good_loc(loc)) {
     char buf[TERMSTR_BUFSIZ];
@@ -490,8 +490,8 @@ void hvm_init() {
 
   alloc_static_tms();
 
-  fprintf(stderr, "HEAP_SIZE = %lu\n", HEAP_SIZE);
-  fprintf(stderr, "RBAG_SIZE = %lu\n", RBAG_SIZE);
+  fprintf(stderr, "HEAP_SIZE = %llu\n", HEAP_SIZE);
+  fprintf(stderr, "RBAG_SIZE = %llu\n", RBAG_SIZE);
   fprintf(stderr, "RBAG      = %u\n", RBAG);
   fprintf(stderr, "RBAG_LEN  = %u\n", RBAG_LEN);
   fprintf(stderr, "NODE_LEN  = %u\n", NODE_LEN);
@@ -1511,6 +1511,8 @@ static void* thread_func(void* arg) {
   if (thd_debug) {
     fprintf(stderr, "%u after sync done\n", tm->tid);
   }
+
+  return NULL;
 }
 
 static void parallel_normalize() {
