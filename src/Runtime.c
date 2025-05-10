@@ -93,12 +93,6 @@ typedef union {
 
 // Global heap
 static u64 *BUFF = NULL;  // NOTE: intentionally *not* atomic ptr.
-/*
-static a64 RNOD_INI = 0;
-static a64 RNOD_END = 0;
-static a64 RBAG_INI = 0;
-static a64 RBAG_END = 0;
-*/
 
 // Heap configuration options
 enum : u64 {
@@ -141,6 +135,19 @@ enum : u32 {
   NODE_LEN = RBAG / (TPC * sizeof(u64))
 };
 
+/*
+typedef struct Net {
+  a64 itrs;
+  a32 idle;
+} Net;
+
+static Net NET = {
+  .itrs = 0,
+  .idle = 0
+};
+
+*/
+
 // Global book
 typedef struct Def {
   char *name;
@@ -157,9 +164,9 @@ typedef struct Book {
 } Book;
 
 static Book BOOK = {
-  .defs = NULL,
-  .len = 0,
-  .cap = 0,
+    .defs = NULL,
+    .len = 0,
+    .cap = 0,
 };
 
 const Term VOID = 0;
@@ -186,7 +193,7 @@ void dump_buff();
 
 // TM operations
 void tm_reset(TM *tm) {
-  tm->nput = 2;
+  tm->nput = 0;
   tm->rput = 0;
   //tm->hput = 0;
   tm->sidx = 0;
@@ -338,11 +345,25 @@ void set(Loc loc, Term term) {
 }
 
 static Pair take_pair(Loc loc) {
-  return __atomic_exchange_n((Pair*)&BUFF[loc], 0ULL, __ATOMIC_RELAXED);
+  Pair pair = __atomic_exchange_n((Pair*)&BUFF[loc], 0ULL, __ATOMIC_RELAXED);
+
+  if (mop_debug) {
+    char buf[TERMSTR_BUFSIZ];
+    fprintf(stderr, "%d take.neg %u %s\n", thread_id, loc, term_str(buf, pair_neg(pair)));
+    fprintf(stderr, "%d take.pos %u %s\n", thread_id, loc + 1, term_str(buf, pair_pos(pair)));
+  }
+
+  return pair;
 }
 
 static void set_pair(Loc loc, Pair pair) {
   __atomic_store_n((Pair*)&BUFF[loc], pair, __ATOMIC_RELAXED);
+
+  if (mop_debug) {
+    char buf[TERMSTR_BUFSIZ];
+    fprintf(stderr, "%d set.neg %u %s\n", thread_id, loc, term_str(buf, pair_neg(pair)));
+    fprintf(stderr, "%d set.pos %u %s\n", thread_id, loc + 1, term_str(buf, pair_pos(pair)));
+  }
 }
 
 static Loc port(u64 n, Loc loc) { return n + loc - 1; }
@@ -368,34 +389,34 @@ static u32 node_alloc_1(TM *tm) {
 */
 
 static u32 node_alloc(TM *tm, u32 num) {
+  if (mop_debug) {
+    fprintf(stderr, "%u alloc %u nodes at %u\n", tm->tid, num, tm->nput);
+  }
   u32 got = 0;
   u32 att = 0; // attempts
   while (got < num) {
-    // TODO: this disables node recycling due to contiguous node requirement in
-    // interact_mat*.
-    if (tm->nput >= NODE_LEN) {
-      fprintf(stdout, "Thread %u node space exhausted (%u)\n", tm->tid, num);
-      exit(EXIT_FAILURE);
-    }
-
     Loc loc = tm->tid * NODE_LEN + (tm->nput % NODE_LEN);
     Pair pair = *(Pair*)&BUFF[loc];
-    tm->nput += 2;
+    tm->nput += 1;
     if (loc > 0 && pair == 0) {
       tm->nloc[got++] = loc;
     }
     #ifndef RECYCLE_NODES
     else {
-      fprintf(stdout, "Non-zero node found with node recycling disabled!\n");
+      // This disables node recycling due to contiguous node requirement
+      // in interact_mat*.
+      fprintf(stderr, "Node space exhausted or non-zero node-pair found, %u\n",
+          loc);
       exit(EXIT_FAILURE);
     }
-    #endif
+    #else
     // TODO: potential to not exit here and wait for var nodes to be zero'd
     // and become available, but simplifying by treating as fatal for now.
     if (++att >= NODE_LEN / 2) {
-      fprintf(stdout, "Thread %u node space exhausted (%u)\n", tm->tid, num);
+      fprintf(stderr, "Thread %u node space exhausted (%u)\n", tm->tid, num);
       exit(EXIT_FAILURE);
     }
+    #endif
   }
   return got;
 }
@@ -403,7 +424,7 @@ static u32 node_alloc(TM *tm, u32 num) {
 // Gets the necessary resources for an interaction. Returns success.
 static inline bool get_resources(TM *tm, u32 need_rbag, u32 need_node) {
   // with no HBAG implemented, treat RBAG exhaustion as fatal
-  u32 got_rbag = (RBAG_LEN - tm->rput) / 2;
+  u32 got_rbag = RBAG_LEN - tm->rput;
   if (got_rbag < need_rbag) {
     fprintf(stderr, "Thread %u redex space exhausted\n", tm->tid);
     exit(EXIT_FAILURE);
@@ -531,23 +552,23 @@ void ffi_rbag_push(Term neg, Term pos) {
 }
 
 u64 inc_itr() {
-  // TODO
-  return 0; // return atomic_load(&RNOD_END) / 2;
+  TM *tm = tms[0];
+  return tm->nput / 2;
 } 
 
 Loc rbag_ini() {
   // TODO
-  return 0;  // RBAG + atomic_load(&RBAG_INI);
+  return RBAG;
 }
 
 Loc rbag_end() {
   // TODO
-  return 0; // RBAG + atomic_load(&RBAG_END);
+  return RBAG;
 }
 
 Loc rnod_end() {
-  // TODO
-  return 0; // atomic_load(&RNOD_END);
+  TM *tm = tms[0];
+  return tm->nput;
 }
 
 // Moves the global buffer and redex bag into a new def and resets
@@ -605,9 +626,14 @@ static Term expand_ref(TM *tm, Loc def_idx) {
   const Term *rbag = def->rbag;
   const u32 rbag_len = def->rbag_len;
 
-  // must occur before get_resources()
-  //a64 offset = atomic_fetch_add(&RNOD_END, nodes_len - 1) - 1;
-  u32 offset = tm->nput + nodes_len - 2;
+  // offset calculation must occur before get_resources() call
+  //Loc offset = atomic_fetch_add(&RNOD_END, nodes_len - 1) - 1;
+  Loc offset = tm->nput - 1;
+
+  if (mop_debug) {
+    fprintf(stderr, "%u expand_ref %u nodes %u rbag %u offset %u\n", tm->tid,
+        def_idx, nodes_len, rbag_len, offset);
+  }
 
   // TODO: If this fails, the Ref term could be pushed back onto bag.
   // For simplicity, exit for now.
@@ -617,6 +643,7 @@ static Term expand_ref(TM *tm, Loc def_idx) {
     exit(1);
   }
 
+  #ifdef RECYCLE_NODES
   // All nodes in a book def are contiguous and have zero-based locs, relative
   // to the def's node array.
   //
@@ -625,7 +652,6 @@ static Term expand_ref(TM *tm, Loc def_idx) {
   //
   // Instead, we must (potentially) set the loc of every expanded term to the
   // relatively positioned loc reserved by get_resources() above, in tm->nloc.
-  #ifdef RECYCLE_NODES
   Term root = term_with_nloc(tm, nodes[0], nodes_len);
   #else
   Term root = term_offset_loc(nodes[0], offset);
@@ -633,12 +659,18 @@ static Term expand_ref(TM *tm, Loc def_idx) {
 
   // No redexes reference these nodes yet; therefore, safe to add un-atomically.
   for (u32 i = 1; i < nodes_len; i++) {
-    Loc loc = tm->nloc[i - 1];
     #ifdef RECYCLE_NODES
-    BUFF[loc] = term_with_nloc(tm, nodes[i], nodes_len);
+    Loc loc = tm->nloc[i - 1];
+    Term term = term_with_nloc(tm, nodes[i], nodes_len);
     #else
-    BUFF[loc] = term_offset_loc(nodes[i], offset);
+    Loc loc = offset + i;
+    Term term = term_offset_loc(nodes[i], offset);
     #endif
+    BUFF[loc] = term;
+    if (mop_debug) {
+      char buf[TERMSTR_BUFSIZ];
+      fprintf(stderr, "%u node %u %s\n", tm->tid, loc, term_str(buf, term));
+    }
   }
 
   for (u32 i = 0; i < rbag_len; i += 2) {
@@ -688,7 +720,7 @@ static void interact_applam(TM *tm, Loc a_loc, Loc b_loc) {
 
 static void interact_appsup(TM *tm, Loc a_loc, Loc b_loc) {
   // TODO: recoverable
-  if (!get_resources(tm, 0, 4)) {
+  if (!get_resources(tm, 0, 8)) {
     fprintf(stderr, "i_appsup: Thread %u node space exhausted\n", tm->tid);
     exit(1);
   }
@@ -697,9 +729,9 @@ static void interact_appsup(TM *tm, Loc a_loc, Loc b_loc) {
   Term tm1 = take(port(1, b_loc));
   Term tm2 = take(port(2, b_loc));
   Loc dp1 = tm->nloc[0];
-  Loc dp2 = tm->nloc[1];
-  Loc cn1 = tm->nloc[2];
-  Loc cn2 = tm->nloc[3];
+  Loc dp2 = tm->nloc[2];
+  Loc cn1 = tm->nloc[4];
+  Loc cn2 = tm->nloc[6];
   set(port(1, dp1), term_new(SUB, 0, 0));
   set(port(2, dp1), term_new(SUB, 0, 0));
   set(port(1, dp2), term_new(VAR, 0, port(2, cn1)));
@@ -742,7 +774,7 @@ static void interact_opxnum(TM *tm, Loc a_loc, Lab op, u32 num, Tag num_type) {
 
 static void interact_opxsup(TM *tm, Loc a_loc, Lab op, Loc b_loc) {
   // TODO: recoverable
-  if (!get_resources(tm, 0, 4)) {
+  if (!get_resources(tm, 0, 8)) {
     fprintf(stderr, "i_opxsup: Thread %u node space exhausted\n", tm->tid);
     exit(1);
   }
@@ -751,9 +783,9 @@ static void interact_opxsup(TM *tm, Loc a_loc, Lab op, Loc b_loc) {
   Term tm1 = take(port(1, b_loc));
   Term tm2 = take(port(2, b_loc));
   Loc dp1 = tm->nloc[0];
-  Loc dp2 = tm->nloc[1];
-  Loc cn1 = tm->nloc[2];
-  Loc cn2 = tm->nloc[3];
+  Loc dp2 = tm->nloc[2];
+  Loc cn1 = tm->nloc[4];
+  Loc cn2 = tm->nloc[6];
   set(port(1, dp1), term_new(SUB, 0, 0));
   set(port(2, dp1), term_new(SUB, 0, 0));
   set(port(1, dp2), term_new(VAR, 0, port(2, cn1)));
@@ -981,7 +1013,7 @@ static void interact_opynum(TM *tm, Loc a_loc, Lab op, u32 y, Tag y_type) {
 
 static void interact_opysup(TM *tm, Loc a_loc, Loc b_loc) {
   // TODO: recoverable
-  if (!get_resources(tm, 0, 4)) {
+  if (!get_resources(tm, 0, 8)) {
     fprintf(stderr, "i_appsup: Thread %u node space exhausted\n", tm->tid);
     exit(1);
   }
@@ -990,9 +1022,9 @@ static void interact_opysup(TM *tm, Loc a_loc, Loc b_loc) {
   Term tm1 = take(port(1, b_loc));
   Term tm2 = take(port(2, b_loc));
   Loc dp1 = tm->nloc[0];
-  Loc dp2 = tm->nloc[1];
-  Loc cn1 = tm->nloc[2];
-  Loc cn2 = tm->nloc[3];
+  Loc dp2 = tm->nloc[2];
+  Loc cn1 = tm->nloc[4];
+  Loc cn2 = tm->nloc[6];
   set(port(1, dp1), term_new(SUB, 0, 0));
   set(port(2, dp1), term_new(SUB, 0, 0));
   set(port(1, dp2), term_new(VAR, 0, port(2, cn1)));
@@ -1018,7 +1050,7 @@ static void interact_dupsup(TM *tm, Loc a_loc, Loc b_loc) {
 
 static void interact_duplam(TM *tm, Loc a_loc, Loc b_loc) {
   // TODO: recoverable
-  if (!get_resources(tm, 0, 4)) {
+  if (!get_resources(tm, 0, 8)) {
     fprintf(stderr, "i_appsup: Thread %u node space exhausted\n", tm->tid);
     exit(1);
   }
@@ -1028,9 +1060,9 @@ static void interact_duplam(TM *tm, Loc a_loc, Loc b_loc) {
   // TODO(enricozb): why is this the only take?
   Term bod = take(port(2, b_loc));
   Loc co1 = tm->nloc[0];
-  Loc co2 = tm->nloc[1];
-  Loc du1 = tm->nloc[2];
-  Loc du2 = tm->nloc[3];
+  Loc co2 = tm->nloc[2];
+  Loc du1 = tm->nloc[4];
+  Loc du2 = tm->nloc[6];
   set(port(1, co1), term_new(SUB, 0, 0));
   set(port(2, co1), term_new(VAR, 0, port(1, du2)));
   set(port(1, co2), term_new(SUB, 0, 0));
@@ -1100,7 +1132,7 @@ static void interact_matnum(TM *tm, Loc mat_loc, Lab mat_len, u32 n, Tag n_type)
     // REVIEW: using get_resources() here instead of node_alloc_1() because upon
     // review there may be a minimum # of redex spots required as well.
     // TODO: recoverable
-    if (!get_resources(tm, 0, 1)) {
+    if (!get_resources(tm, 0, 2)) {
       fprintf(stderr, "i_matnum: Thread %u node space exhausted\n", tm->tid);
       exit(1);
     }
@@ -1305,6 +1337,7 @@ static inline int sequential_step(TM* tm) {
   //Term neg = take(loc);
   //Term pos = take(loc + 1);
   interact(tm, pair_neg(pair), pair_pos(pair));
+  //tm->itrs++;
 
   return 1;
 }
@@ -1333,12 +1366,13 @@ static void* parallel_step(void* arg) {
 
 static void boot(Loc def_idx) {
   TM *tm = tms[0];
-  if (tm->nput > 2 || tm->rput > 0) {
+  if (tm->nput > 0 || tm->rput > 0) {
     fprintf(stderr, "booting on non-empty state\n");
     exit(1);
   }
-  Loc root = 0;
-  set(root, expand_ref(tm, def_idx));
+  fprintf(stderr, "booting def %u\n", def_idx);
+  tm->nput = 1; // node_alloc_1, effectively
+  set(0, expand_ref(tm, def_idx));
 }
 
 static void parallel_normalize() {
@@ -1371,7 +1405,7 @@ Term normalize(Term term) {
   }
 
   dump_term(133);
-  dump_buff(tms[0]);
+  //dump_buff(tms[0]);
 
   return get(0);
 }

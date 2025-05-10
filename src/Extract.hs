@@ -7,69 +7,74 @@ import Type
 -- ------------
 
 extractPCore :: Term -> IO PCore
-extractPCore term = case termTag term of
-  VAR -> do
-    got <- get (termLoc term)
-    extractVar (termLoc term) got
-  REF -> do
-    name <- defName (termLoc term)
-    return $ PRef name
-  NUL -> return PNul
-  LAM -> do
-    let loc = termLoc term
-    var <- get (loc + 0)
-    bod <- get (loc + 1)
-    var' <- extractNCore (loc + 0) var
-    bod' <- extractPCore bod
-    return $ PLam var' bod'
-  SUP -> do
-    let loc = termLoc term
-    tm1 <- get (loc + 0)
-    tm2 <- get (loc + 1)
-    tm1' <- extractPCore tm1
-    tm2' <- extractPCore tm2
-    return $ PSup tm1' tm2'
-  U32 -> return $ PU32 (termLoc term)
-  I32 -> return $ PI32 (word32ToInt32 $ termLoc term)
-  F32 -> return $ PF32 (word32ToFloat $ termLoc term)
-  tag -> error $ "extractPCore: unhandled case: " ++ show tag
+extractPCore term = do
+  putStrLn $ "extractPCore: " ++ show (termTag term)
+  case termTag term of
+    VAR -> do
+      got <- get (termLoc term)
+      extractVar (termLoc term) got
+    REF -> do
+      name <- defName (termLoc term)
+      return $ PRef name
+    NUL -> return PNul
+    LAM -> do
+      let loc = termLoc term
+      var <- get (loc + 0)
+      bod <- get (loc + 1)
+      var' <- extractNCore (loc + 0) var
+      bod' <- extractPCore bod
+      return $ PLam var' bod'
+    SUP -> do
+      let loc = termLoc term
+      tm1 <- get (loc + 0)
+      tm2 <- get (loc + 1)
+      tm1' <- extractPCore tm1
+      tm2' <- extractPCore tm2
+      return $ PSup tm1' tm2'
+    U32 -> return $ PU32 (termLoc term)
+    I32 -> return $ PI32 (word32ToInt32 $ termLoc term)
+    F32 -> return $ PF32 (word32ToFloat $ termLoc term)
+    tag -> error $ "extractPCore: unhandled case: " ++ show tag
 
 -- Convert a term in memory to a NCore.
 -- The optional location is the location of the term
 -- being extracted in the buffer.
 extractNCore :: Loc -> Term -> IO NCore
-extractNCore loc term = case termTag term of
-  ERA -> return NEra
-  SUB -> return $ NSub ("v" ++ show loc)
-  APP -> do
-    let loc = termLoc term
-    arg <- get (loc + 0)
-    ret <- get (loc + 1)
-    arg' <- extractPCore arg
-    ret' <- extractNCore (loc + 1) ret
-    return $ NApp arg' ret'
-  DUP -> do
-    let loc = termLoc term
-    dp1 <- get (loc + 0)
-    dp2 <- get (loc + 1)
-    dp1' <- extractNCore (loc + 0) dp1
-    dp2' <- extractNCore (loc + 1) dp2
-    return $ NDup dp1' dp2'
-  MAT -> do
-    let num = termLab term
-    let loc = termLoc term
-    let extractArm i = get (loc + i) >>= extractPCore
-    ret  <- get (loc + 0) >>= extractNCore (loc + 0)
-    arms <- mapM extractArm [1..num]
-    return $ NMat ret arms
-  x | elem x [OPX, OPY] -> do
-    let op  = termOper term
-    let loc = termLoc term
-    arg <- get (loc + 0)
-    ret <- get (loc + 1)
-    arg' <- extractPCore arg
-    ret' <- extractNCore (loc + 1) ret
-    return $ NOp2 op arg' ret'
+extractNCore loc term = do
+  putStrLn $ "extractNCore: " ++ show (termTag term)
+  case termTag term of
+    ERA -> return NEra
+    SUB -> return $ NSub ("v" ++ show loc)
+    APP -> do
+      let loc = termLoc term
+      arg <- get (loc + 0)
+      ret <- get (loc + 1)
+      arg' <- extractPCore arg
+      ret' <- extractNCore (loc + 1) ret
+      return $ NApp arg' ret'
+    DUP -> do
+      let loc = termLoc term
+      dp1 <- get (loc + 0)
+      dp2 <- get (loc + 1)
+      dp1' <- extractNCore (loc + 0) dp1
+      dp2' <- extractNCore (loc + 1) dp2
+      return $ NDup dp1' dp2'
+    MAT -> do
+      let num = termLab term
+      let loc = termLoc term
+      let extractArm i = get (loc + i) >>= extractPCore
+      ret  <- get (loc + 0) >>= extractNCore (loc + 0)
+      arms <- mapM extractArm [1..num]
+      return $ NMat ret arms
+    x | elem x [OPX, OPY] -> do
+      let op  = termOper term
+      let loc = termLoc term
+      arg <- get (loc + 0)
+      ret <- get (loc + 1)
+      arg' <- extractPCore arg
+      ret' <- extractNCore (loc + 1) ret
+      return $ NOp2 op arg' ret'
+    tag -> error $ "extractNCore: unhandled case: " ++ show tag
 
 extractVar :: Loc -> Term -> IO PCore
 extractVar loc term = case termTag term of
@@ -100,12 +105,14 @@ extractDex loc = do
 extractBag :: [Loc] -> IO Bag
 extractBag [] = return []
 extractBag (loc:locs) = do
+  putStrLn $ "extractBag "
   dex  <- extractDex loc
   dexs <- extractBag locs
   return (dex : dexs)
 
 extractNet :: Term -> IO Net
 extractNet root = do
+  putStrLn $ "extractNet: " ++ show (termLoc root)
   root' <- extractPCore root
   ini   <- rbagIni
   end   <- rbagEnd
