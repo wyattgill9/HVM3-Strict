@@ -71,6 +71,7 @@ int thread_join(pthread_t thread, void **retval) {
 // Types
 typedef int32_t i32;
 typedef uint32_t u32;
+typedef _Atomic(u32) a32;
 typedef float f32;
 typedef int64_t i64;
 typedef uint64_t u64;
@@ -107,46 +108,40 @@ enum : u64 {
   // Cache line size
   CLINE_BYTES = 64,
   CLINE_U64 = CLINE_BYTES / sizeof(u64),
-  //  RBAG_MAX = HEAP_SIZE / sizeof(u64),
 
   // Threads per CPU
-  TPC = 1,
+  TPC = 8,
 
   // Various redex bag starting indices within the heap to choose from.
   // The remaining percentage is used for node storage.
 
   // Cache-aligned and named for the percentage of heap used.
-  RBAG_25_PCT = ((HEAP_SIZE - HEAP_SIZE / 4) / CLINE_BYTES) * CLINE_U64,
-  RBAG_50_PCT = ((HEAP_SIZE / 2) / CLINE_BYTES) * CLINE_U64,
-  RBAG_75_PCT = ((HEAP_SIZE / 4) / CLINE_BYTES) * CLINE_U64,
+  RBAG_25_PCT = (HEAP_SIZE / 4),
+  RBAG_50_PCT = (HEAP_SIZE / 2),
+  RBAG_75_PCT = (HEAP_SIZE - (HEAP_SIZE / 4)),
   // TODO: "RBAG_16M" to match HVM2
 
   ////////////////////////////////////
-  // Choose a RBAG starting index here
+  // Choose a RBAG size here
   ////////////////////////////////////
-  RBAG = RBAG_50_PCT
+  RBAG_SIZE = RBAG_25_PCT
 };
 
 enum : u32 {
+  // Final calculated RBAG index
+  RBAG = (HEAP_SIZE - RBAG_SIZE) / sizeof(u64),
+
   // Calculate RBAG_LEN and NODE_LEN: number of u64 elements *per thread*
   // TODO: MUST be 16-byte aligned. 64-byte alignment might be preferable.
   // TODO: actually these could be in terms of u128 elements
-  RBAG_LEN = (HEAP_SIZE - RBAG) / (TPC * sizeof(u64)),
-  NODE_LEN = RBAG / (TPC * sizeof(u64))
+  RBAG_LEN = RBAG_SIZE / (TPC * sizeof(u64)),
+  NODE_LEN = (HEAP_SIZE - RBAG_SIZE) / (TPC * sizeof(u64))
 };
 
-/*
 typedef struct Net {
   a64 itrs;
   a32 idle;
 } Net;
-
-static Net NET = {
-  .itrs = 0,
-  .idle = 0
-};
-
-*/
 
 // Global book
 typedef struct Def {
@@ -163,10 +158,15 @@ typedef struct Book {
   u32 cap;
 } Book;
 
+static Net net = {
+  .itrs = 0,
+  .idle = 0
+};
+
 static Book BOOK = {
-    .defs = NULL,
-    .len = 0,
-    .cap = 0,
+  .defs = NULL,
+  .len = 0,
+  .cap = 0,
 };
 
 const Term VOID = 0;
@@ -280,10 +280,12 @@ static Term term_with_nloc(TM *tm, Term term, u32 nodes_len) {
   return term_with_loc(term, tm->nloc[loc]);
 }
 
-static int mop_debug = 1; // memory operations
-static int thread_id = 0;
+static int mop_debug = 0; // memory operations
+static int thd_debug = 0; // threading
 
-static int TERMSTR_BUFSIZ = 128;
+static _Thread_local int thread_id = 0;
+
+#define TERMSTR_BUFSIZ 128
 
 static const char* term_str(char* buf, Term term) {
   sprintf(buf, "%s lab:%u loc:%u", tag_to_str(term_tag(term)),
@@ -322,15 +324,17 @@ Term get(Loc loc) {
 Term take(Loc loc) {
   Term term = atomic_exchange_explicit((a64*)&BUFF[loc], VOID, memory_order_relaxed);
 
-  int invalid = ((term_tag(term) == VOID) ? 1 : 0);
-  if (invalid || (mop_debug && good_loc(loc))) {
+  //int invalid = ((term_tag(term) == VOID) ? 1 : 0);
+  if (/*invalid ||*/ (mop_debug && good_loc(loc))) {
     char buf[TERMSTR_BUFSIZ];
     fprintf(stderr, "%d take %u %s\n", thread_id, loc, term_str(buf, term));
   }
+  /*
   if (invalid) {
-    fprintf(stderr, "VOID term taken.");
+    fprintf(stderr, "VOID term taken.\n");
     exit(1);
   }
+  */
 
   return term;
 }
@@ -433,6 +437,8 @@ static inline bool get_resources(TM *tm, u32 need_rbag, u32 need_node) {
   return got_node >= need_node;
 }
 
+// TODO: rbag_push_pair
+
 static void rbag_push(TM *tm, Term neg, Term pos) {
   #if 1 || defined(DEBUG)
   //bool free_local = tm->hput < HLEN;
@@ -449,6 +455,11 @@ static void rbag_push(TM *tm, Term neg, Term pos) {
   } else {
   */
   Loc loc = RBAG + tm->tid * RBAG_LEN + tm->rput;
+
+  if (0 && mop_debug) {
+    fprintf(stderr, "%u calling set_pair @ %u, rput %u\n", tm->tid, loc, tm->rput);
+  }
+
   set_pair(loc, pair_new(neg, pos));
   tm->rput += 2;
   //}
@@ -466,56 +477,6 @@ static Pair rbag_pop(TM* tm) {
   }
 }
 
-/*
-static Loc sequential_rbag_pop() {
-  // Use atomic fetch_add to increment RBAG_INI atomically
-  // This ensures thread-safe access to the reduction bag
-  u64 ini = atomic_fetch_add(&RBAG_INI, 2);
-  u64 end = atomic_load_explicit(&RBAG_END, memory_order_relaxed);
-
-  // Check if we've reached or exceeded the end of the reduction bag
-  if (ini >= end) {
-    // If we've exhausted the reduction bag, return 0
-    return 0;
-  }
-
-  // Calculate and return the location
-  // ini represents the starting index of the location pair
-  return RBAG + ini;
-}
-*/
-
-static Loc parallel_rbag_pop(TM *tm) {
-  return 0;
-/*
-  while (1) {
-    // Check if there's an item available without modifying indices
-    u64 start = atomic_load(&RBAG_INI); // TODO: relaxed?
-    u64 end = atomic_load(&RBAG_END);
-    
-    if (start >= end) {
-      // Queue is empty -- wait a bit to allow other threads to complete
-      const u32 MAX_ATTEMPTS = 10;
-      for (u32 attempts = 0; start >= end && attempts < MAX_ATTEMPTS; ++attempts) {
-        usleep(100);
-        end = atomic_load_explicit(&RBAG_END, memory_order_relaxed);
-      }
-      // Queue might be genuinely empty
-      if (start >= end) {
-        return 0;
-      }
-    }
-    
-    // Try to claim the next two slots
-    if (atomic_compare_exchange_strong(&RBAG_INI, &start, start + 2)) {
-      // Success
-      return RBAG + start;
-    }
-    // Another thread claimed those slots, try again
-  }
-*/
-}
-
 // FFI functions
 void hvm_init() {
   if (BUFF == NULL) {
@@ -528,6 +489,12 @@ void hvm_init() {
   memset(BUFF, 0, HEAP_SIZE);
 
   alloc_static_tms();
+
+  fprintf(stderr, "HEAP_SIZE = %lu\n", HEAP_SIZE);
+  fprintf(stderr, "RBAG_SIZE = %lu\n", RBAG_SIZE);
+  fprintf(stderr, "RBAG      = %u\n", RBAG);
+  fprintf(stderr, "RBAG_LEN  = %u\n", RBAG_LEN);
+  fprintf(stderr, "NODE_LEN  = %u\n", NODE_LEN);
 }
 
 void hvm_free() {
@@ -552,8 +519,7 @@ void ffi_rbag_push(Term neg, Term pos) {
 }
 
 u64 inc_itr() {
-  TM *tm = tms[0];
-  return tm->nput / 2;
+  return net.itrs;
 } 
 
 Loc rbag_ini() {
@@ -628,7 +594,8 @@ static Term expand_ref(TM *tm, Loc def_idx) {
 
   // offset calculation must occur before get_resources() call
   //Loc offset = atomic_fetch_add(&RNOD_END, nodes_len - 1) - 1;
-  Loc offset = tm->nput - 1;
+  Loc offset = (tm->tid * NODE_LEN) + tm->nput - 1;
+  //if (tm->tid == 0) offset -= 1;
 
   if (mop_debug) {
     fprintf(stderr, "%u expand_ref %u nodes %u rbag %u offset %u\n", tm->tid,
@@ -684,6 +651,17 @@ static Term expand_ref(TM *tm, Loc def_idx) {
     rbag_push(tm, neg, pos);
   }
   return root;
+}
+
+static void boot(Loc def_idx) {
+  TM *tm = tms[0];
+  if (tm->nput > 0 || tm->rput > 0) {
+    fprintf(stderr, "booting on non-empty state\n");
+    exit(1);
+  }
+  //fprintf(stderr, "booting def %u\n", def_idx);
+  tm->nput = 1; // node_alloc_1, effectively
+  set(0, expand_ref(tm, def_idx));
 }
 
 // Atomic Linker
@@ -1326,86 +1304,248 @@ static void interact(TM *tm, Term neg, Term pos) {
   }
 }
 
-static inline int sequential_step(TM* tm) {
+static inline bool sequential_step(TM* tm) {
   Loc loc = /*sequential_*/rbag_pop(tm);
 
   if (loc == 0) {
-    return 0;
+    return false;
   }
 
   Pair pair = take_pair(loc);
   //Term neg = take(loc);
   //Term pos = take(loc + 1);
   interact(tm, pair_neg(pair), pair_pos(pair));
-  //tm->itrs++;
-
-  return 1;
+  return true;
 }
 
-static void* parallel_step(void* arg) {
-  int tid = *(int*)arg;
-  TM *tm = tms[tid];
-  while (1) {
-    Loc loc = parallel_rbag_pop(tm);
-    if (loc == 0) {
-      return NULL;
+// A simple spin-wait barrier using atomic operations
+a64 a_reached = 0; // number of threads that reached the current barrier
+a64 a_barrier = 0; // number of barriers passed during this program
+static void sync_threads() {
+  u64 barrier_old = atomic_load_explicit(&a_barrier, memory_order_relaxed);
+  if (atomic_fetch_add_explicit(&a_reached, 1, memory_order_relaxed) == (TPC - 1)) {
+    // Last thread to reach the barrier resets the counter and advances the barrier
+    atomic_store_explicit(&a_reached, 0, memory_order_relaxed);
+    atomic_store_explicit(&a_barrier, barrier_old + 1, memory_order_release);
+  } else {
+    u32 tries = 0;
+    while (atomic_load_explicit(&a_barrier, memory_order_acquire) == barrier_old) {
+      sched_yield();
     }
-    // As RBAG_END is incremented prior to term(s) being written, there is a
-    // race condition where another thread may read 0ULL from that location.
-    while (1) {
-      Pair pair = take_pair(loc);
-      if (pair > 0ULL) {
-        interact(tm, pair_neg(pair), pair_pos(pair));
-        break;
+  }
+}
+
+static bool set_idle(bool was_busy) {
+  if (was_busy) {
+    u32 idle = atomic_fetch_add_explicit(&net.idle, 1, memory_order_relaxed);
+    if (thd_debug) {
+      fprintf(stderr, "%u set idle, was idle= %u\n", thread_id, idle);
+    }
+
+  }
+  return false;
+}
+
+static bool set_busy(bool was_busy) {
+  if (!was_busy) {
+    u32 idle = atomic_fetch_sub_explicit(&net.idle, 1, memory_order_relaxed);
+    if (thd_debug) {
+      fprintf(stderr, "%u set busy, was idle = %u\n", thread_id, idle);
+    }
+  }
+  return true;
+}
+
+/*
+void evaluator(Net* net, TM* tm, Book* book) {
+  // Initializes the global idle counter
+  atomic_store_explicit(&net->idle, TPC - 1, memory_order_relaxed);
+  sync_threads();
+
+  // Performs some interactions
+  u32  tick = 0;
+  bool busy = tm->tid == 0;
+  while (true) {
+    tick += 1;
+
+    // If we have redexes...
+    if (rbag_len(net, tm) > 0) {
+      // Update global idle counter
+      if (!busy) atomic_fetch_sub_explicit(&net->idle, 1, memory_order_relaxed);
+      busy = true;
+
+      // Perform an interaction
+      #ifdef DEBUG
+      if (!interact(net, tm, book)) debug("interaction failed\n");
+      #else
+      interact(net, tm, book);
+      #endif
+    // If we have no redexes...
+    } else {
+      // Update global idle counter
+      if (busy) atomic_fetch_add_explicit(&net->idle, 1, memory_order_relaxed);
+      busy = false;
+
+      //// Peeks a redex from target
+      u32 sid = (tm->tid - 1) % TPC;
+      u32 idx = sid*(G_RBAG_LEN/TPC) + (tm->sidx++);
+
+      // Stealing Everything: this will steal all redexes
+
+      Pair got = atomic_exchange_explicit(&net->rbag_buf[idx], 0, memory_order_relaxed);
+      if (got != 0) {
+        push_redex(net, tm, got);
+        tm->sgud++;
+        continue;
+      } else {
+        tm->sidx = 0;
+        tm->sbad++;
       }
-      //YIELD();
+
+      // Chill...
+      sched_yield();
+      // Halt if all threads are idle
+      if (tick % 256 == 0) {
+        if (atomic_load_explicit(&net->idle, memory_order_relaxed) == TPC) {
+          break;
+        }
+      }
     }
   }
-  return (void*)1;
+
+  sync_threads();
+
+  atomic_fetch_add(&net->itrs, tm->itrs);
+  tm->itrs = 0;
+}
+*/
+
+static u32 choose_victim(TM *tm) {
+  return (tm->tid - 1) % TPC;
 }
 
-static void boot(Loc def_idx) {
-  TM *tm = tms[0];
-  if (tm->nput > 0 || tm->rput > 0) {
-    fprintf(stderr, "booting on non-empty state\n");
-    exit(1);
+static bool try_steal(TM *tm) {
+  u32 sid = choose_victim(tm);
+  Loc loc = RBAG + sid * RBAG_LEN + tm->sidx;
+
+  if (thd_debug) {
+    fprintf(stderr, "%u try stealing from %u @ %u : %u\n", tm->tid, sid,
+        tm->sidx, loc);
   }
-  fprintf(stderr, "booting def %u\n", def_idx);
-  tm->nput = 1; // node_alloc_1, effectively
-  set(0, expand_ref(tm, def_idx));
+
+  tm->sidx += 2;
+
+  Pair got = take_pair(loc);
+
+  if (got != 0) {
+    if (thd_debug) { fprintf(stderr, "%u success, pushing...\n", tm->tid); }
+
+    rbag_push(tm, pair_neg(got), pair_pos(got));
+
+    if (thd_debug) { fprintf(stderr, "%u steal done\n", tm->tid); }
+
+    // tm->sgud++;
+    return true;
+  } else {
+    if (thd_debug) { fprintf(stderr, "%u steal failed\n", tm->tid); }
+
+    tm->sidx = 0;
+    // tm->sbad++;
+    return false;
+  }
+}
+
+static bool check_timeout(u32 tick) {
+  if (tick % 256 == 0) {
+    u32 idle = atomic_load_explicit(&net.idle, memory_order_relaxed);
+    if (idle == TPC) {
+     return true;
+    }
+    if (thd_debug) {
+      fprintf(stderr, "%u idle, total: %u\n", thread_id, idle);
+    }
+  }
+  return false;
+}
+
+static void* thread_func(void* arg) {
+  thread_id = (u64)arg;
+  TM *tm = tms[thread_id];
+
+  sync_threads();
+  if (thd_debug) {
+    fprintf(stderr, "%u before sync done\n", tm->tid);
+  }
+
+  u32  tick = 0;
+  bool busy = tm->tid == 0;
+  while (true) {
+    tick += 1;
+    Loc loc = rbag_pop(tm);
+    if (loc) {
+      busy = set_busy(busy);
+
+      Pair pair = take_pair(loc);
+
+      interact(tm, pair_neg(pair), pair_pos(pair));
+    } else {
+      busy = set_idle(busy);
+
+      //TODO! debugging
+      if (/*(tm->tid > 0) && */ try_steal(tm)) continue;
+
+      sched_yield();
+
+      if (check_timeout(tick)) break;
+    }
+  }
+
+  atomic_fetch_add(&net.itrs, tm->nput / 2);
+
+  if (thd_debug) {
+    fprintf(stderr, "%u before sync...\n", tm->tid);
+  }
+
+  sync_threads();
+
+  if (thd_debug) {
+    fprintf(stderr, "%u after sync done\n", tm->tid);
+  }
 }
 
 static void parallel_normalize() {
   thread_t threads[TPC];
-  int thread_ids[TPC];
 
-  for (int i = 0; i < TPC; i++) {
-    thread_ids[i] = i;
-    int rc = thread_create(&threads[i], NULL, parallel_step, &thread_ids[i]);
+  // Initializes the global idle counter
+  atomic_store_explicit(&net.idle, TPC - 1, memory_order_relaxed);
+
+  for (u64 i = 0; i < TPC; i++) {
+    int rc = thread_create(&threads[i], NULL, thread_func, (void*)i);
   }
 
-  for (int i = 0; i < TPC; i++) {
+  for (u64 i = 0; i < TPC; i++) {
     thread_join(threads[i], NULL);
   }
 }
 
 Term normalize(Term term) {
   if (term_tag(term) != REF) {
-    printf("normalizing non-ref\n");
+    fprintf(stderr, "normalizing non-ref\n");
     exit(1);
   }
 
   boot(term_loc(term));
 
+  /*
   if (TPC == 1) {
-    while (sequential_step(tms[0]))
+    TM *tm = tms[0];
+    while (sequential_step(tm))
       ;
+    atomic_fetch_add(&net.itrs, tm->nput / 2);
   } else {
+  */
     parallel_normalize();
-  }
-
-  dump_term(133);
-  //dump_buff(tms[0]);
+    //}
 
   return get(0);
 }
