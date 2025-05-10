@@ -1,6 +1,7 @@
 // HVM3-Strict Core: single-thread, polarized, LAM/APP & DUP/SUP only
 
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -187,6 +188,7 @@ static Book BOOK = {
 
 // Debugging
 static char *tag_to_str(Tag tag);
+void dump_term(Loc loc);
 void dump_buff();
 
 // Term operations
@@ -211,21 +213,68 @@ Term term_offset_loc(Term term, Loc offset) {
   return (term & 0xFFFFFFFF) | (((Term)loc) << 32);
 }
 
+static int mop_debug = 1; // memory operations
+static int thread_id = 0;
+
+static int TERMSTR_BUFSIZ = 128;
+
+static const char* term_str(char* buf, Term term) {
+  sprintf(buf, "%s lab:%u loc:%u", tag_to_str(term_tag(term)),
+          (int)term_lab(term), (int)term_loc(term));
+  return buf;
+}
+
+static bool good_loc(Loc loc) { return true; }
+
 // Memory operations
 Term swap(Loc loc, Term term) {
-  return atomic_exchange_explicit(&BUFF[loc], term, memory_order_relaxed);
+  Term res = atomic_exchange_explicit((a64*)&BUFF[loc], term, memory_order_relaxed);
+
+  if (mop_debug && good_loc(loc)) {
+    char buf1[TERMSTR_BUFSIZ];
+    char buf2[TERMSTR_BUFSIZ];
+    fprintf(stderr, "%d swap %u %s with %s\n", thread_id,
+        /*itr_str(itr),*/
+        loc, term_str(buf1, res), term_str(buf2, term));
+  }
+
+  return res;
 }
 
 Term get(Loc loc) {
-  return atomic_load_explicit(&BUFF[loc], memory_order_relaxed);
+  Term term = atomic_load_explicit((a64*)&BUFF[loc], memory_order_relaxed);
+
+  if (mop_debug && good_loc(loc)) {
+    char buf[TERMSTR_BUFSIZ];
+    fprintf(stderr, "%d get %u %s\n", thread_id, loc, term_str(buf, term));
+  }
+
+  return term;
 }
 
 Term take(Loc loc) {
-  return atomic_exchange_explicit(&BUFF[loc], VOID, memory_order_relaxed);
+  Term term = atomic_exchange_explicit((a64*)&BUFF[loc], VOID, memory_order_relaxed);
+
+  int invalid = ((term_tag(term) == VOID) ? 1 : 0);
+  if (invalid || (mop_debug && good_loc(loc))) {
+    char buf[TERMSTR_BUFSIZ];
+    fprintf(stderr, "%d take %u %s\n", thread_id, loc, term_str(buf, term));
+  }
+  if (invalid) {
+    fprintf(stderr, "VOID term taken.");
+    exit(1);
+  }
+
+  return term;
 }
 
 void set(Loc loc, Term term) {
   atomic_store_explicit(&BUFF[loc], term, memory_order_relaxed);
+
+  if (mop_debug && good_loc(loc)) {
+    char buf[TERMSTR_BUFSIZ];
+    fprintf(stderr, "%d set %u %s\n", thread_id, loc, term_str(buf, term));
+  }
 }
 
 Loc port(u64 n, Loc x) { return n + x - 1; }
