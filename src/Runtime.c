@@ -176,14 +176,15 @@ const Term VOID = 0;
 
 // Local Thread Memory
 typedef struct TM {
-  u32  tid; // thread id
-  Loc  nput; // next node allocation attempt index
-  Loc  rput; // next rbag push index
-  //u32  hput; // next hbag push index
-  Loc  sidx; // steal index
-  u64  itrs; // interaction count
-  Loc  nloc[0xFFF]; // node allocation indices
-  //Pair hbag_buf[HLEN]; // high-priority redexes
+  u32 tid; // thread id
+  Loc nput; // next node allocation attempt index
+  Loc rput; // next rbag push index
+  Loc sidx; // steal index
+  Loc slst; // last steal index
+  u32 sgud;
+  u32 sbad;
+  u64 itrs; // interaction count
+  Loc nloc[0xFFF]; // node allocation indices
 } TM;
 
 static TM *tms[TPC];
@@ -197,7 +198,6 @@ void dump_buff(TM *tm);
 void tm_reset(TM *tm) {
   tm->nput = 0;
   tm->rput = 0;
-  //tm->hput = 0;
   tm->sidx = 0;
   tm->itrs = 0;
 }
@@ -210,6 +210,9 @@ TM *tm_new(u64 tid) {
   }
   tm_reset(tm);
   tm->tid = tid;
+  tm->slst = 0;
+  tm->sgud = 0;
+  tm->sbad = 0;
   return tm;
 }
 
@@ -1334,14 +1337,14 @@ static u32 choose_victim(TM *tm) {
 
 static bool try_steal(TM *tm) {
   u32 sid = choose_victim(tm);
-  Loc loc = RBAG + sid * RBAG_LEN + tm->sidx;
+  Loc loc = 0;
+ retry:
+  loc = RBAG + sid * RBAG_LEN + tm->sidx;
 
   if (thd_debug) {
     fprintf(stderr, "%u try stealing from %u @ %u : %u\n", tm->tid, sid,
         tm->sidx, loc);
   }
-
-  tm->sidx += 2;
 
   Pair got = take_pair(loc);
 
@@ -1352,13 +1355,40 @@ static bool try_steal(TM *tm) {
 
     if (thd_debug) { fprintf(stderr, "%u steal done\n", tm->tid); }
 
-    // tm->sgud++;
+    tm->slst = tm->sidx;
+    tm->sidx += 2;
+    tm->sgud++;
+
     return true;
   } else {
     if (thd_debug) { fprintf(stderr, "%u steal failed\n", tm->tid); }
 
-    tm->sidx = 0;
-    // tm->sbad++;
+    tm->sbad++;
+
+    // The logic here, is that since we know the index of our last successful
+    // steal, we should always trying stealing up to at least that index (-2).
+    //
+    // Because that index is where the owning thread *may* have pushed it's
+    // next redex.
+    //
+    // That, and no yields() while we attempt up to that index. Only yield
+    // when we reset to zero.
+    //
+    // It's entirely possible i've introduced a race condition with this logic;
+    // it should be considered experimental and not thoroughly tested.
+    //
+    // If you ever randomly see a result like "v12345", it's may be due to this.
+    //
+    // #define STABLE // to make it more stable
+    //
+    #ifndef STABLE
+    if (tm->sidx + 2 < tm->slst) {
+      tm->sidx += 2;
+      goto retry;
+    } else
+    #endif
+      tm->sidx = 0;
+
     return false;
   }
 }
@@ -1380,10 +1410,7 @@ static void* thread_func(void* arg) {
   thread_id = (u64)arg;
   TM *tm = tms[thread_id];
 
-  sync_threads();
-  if (thd_debug) {
-    fprintf(stderr, "%u before sync done\n", tm->tid);
-  }
+  //  sync_threads();
 
   u32  tick = 0;
   bool busy = tm->tid == 0;
@@ -1410,11 +1437,15 @@ static void* thread_func(void* arg) {
   atomic_fetch_add(&net.nods, tm->nput);
   atomic_fetch_add(&net.itrs, tm->itrs);
 
+  if (0) {
+    fprintf(stderr, "t%u: %" PRIu64 " itrs, steals: %u good %u bad\n", tm->tid, tm->itrs, tm->sgud, tm->sbad);
+  }
+
   if (thd_debug) {
     fprintf(stderr, "%u before sync...\n", tm->tid);
   }
 
-  sync_threads();
+  //  sync_threads();
 
   if (thd_debug) {
     fprintf(stderr, "%u after sync done\n", tm->tid);
