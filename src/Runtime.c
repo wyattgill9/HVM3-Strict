@@ -159,6 +159,7 @@ typedef struct Book {
   u32 cap;
 } Book;
 
+// TODO: net_reset()
 static Net net = {
   .nods = 0,
   .itrs = 0,
@@ -207,8 +208,8 @@ TM *tm_new(u64 tid) {
     fprintf(stderr, "TM memory allocation failed\n");
     exit(EXIT_FAILURE);
   }
-  tm->tid = tid;
   tm_reset(tm);
+  tm->tid = tid;
   return tm;
 }
 
@@ -303,9 +304,8 @@ Term swap(Loc loc, Term term) {
   if (mop_debug && good_loc(loc)) {
     char buf1[TERMSTR_BUFSIZ];
     char buf2[TERMSTR_BUFSIZ];
-    fprintf(stderr, "%d swap %u %s with %s\n", thread_id,
-        /*itr_str(itr),*/
-        loc, term_str(buf1, res), term_str(buf2, term));
+    fprintf(stderr, "%d swap %u %s with %s\n", thread_id, loc,
+        term_str(buf1, res), term_str(buf2, term));
   }
 
   return res;
@@ -325,17 +325,10 @@ Term get(Loc loc) {
 Term take(Loc loc) {
   Term term = atomic_exchange_explicit((a64*)&BUFF[loc], VOID, memory_order_relaxed);
 
-  //int invalid = ((term_tag(term) == VOID) ? 1 : 0);
-  if (/*invalid ||*/ (mop_debug && good_loc(loc))) {
+  if (mop_debug && good_loc(loc)) {
     char buf[TERMSTR_BUFSIZ];
     fprintf(stderr, "%d take %u %s\n", thread_id, loc, term_str(buf, term));
   }
-  /*
-  if (invalid) {
-    fprintf(stderr, "VOID term taken.\n");
-    exit(1);
-  }
-  */
 
   return term;
 }
@@ -474,11 +467,13 @@ void hvm_init() {
 
   alloc_static_tms();
 
-  fprintf(stderr, "HEAP_SIZE = %llu\n", HEAP_SIZE);
-  fprintf(stderr, "RBAG_SIZE = %llu\n", RBAG_SIZE);
+  #if 0
+  fprintf(stderr, "HEAP_SIZE = %" PRIu64 "\n", HEAP_SIZE);
+  fprintf(stderr, "RBAG_SIZE = %" PRIu64 "\n", RBAG_SIZE);
   fprintf(stderr, "RBAG      = %u\n", RBAG);
   fprintf(stderr, "RBAG_LEN  = %u\n", RBAG_LEN);
   fprintf(stderr, "NODE_LEN  = %u\n", NODE_LEN);
+  #endif
 }
 
 void hvm_free() {
@@ -503,7 +498,7 @@ void ffi_rbag_push(Term neg, Term pos) {
 }
 
 u64 inc_itr() {
-  return net.nods / 2;
+  return net.itrs;
 } 
 
 Loc rbag_ini() {
@@ -1103,6 +1098,8 @@ static void interact_matnum(TM *tm, Loc mat_loc, Lab mat_len, u32 n, Tag n_type)
 static void interact_matsup(TM *tm, Loc mat_loc, Lab mat_len, Loc sup_loc) {
   fprintf(stderr, "interact_matsup not supported (yet)\n");
   exit(1);
+  // TODO: convert to get_resources()
+
   /*
   // TODO: recoverable
   if (!get_resources(tm, 0, 2 + mat_len * 3)) {
@@ -1277,10 +1274,12 @@ static void interact(TM *tm, Term neg, Term pos) {
     }
     break;
   }
+
+  tm->itrs += 1;
 }
 
 static inline bool sequential_step(TM* tm) {
-  Loc loc = /*sequential_*/rbag_pop(tm);
+  Loc loc = rbag_pop(tm);
 
   if (loc == 0) {
     return false;
@@ -1409,6 +1408,7 @@ static void* thread_func(void* arg) {
   }
 
   atomic_fetch_add(&net.nods, tm->nput);
+  atomic_fetch_add(&net.itrs, tm->itrs);
 
   if (thd_debug) {
     fprintf(stderr, "%u before sync...\n", tm->tid);
