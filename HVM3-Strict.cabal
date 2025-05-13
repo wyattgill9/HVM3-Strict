@@ -28,7 +28,7 @@ executable hvms
     hs-source-dirs:       src
     default-language:     GHC2024
     c-sources:            src/Runtime.c
-    cc-options:           -O3
+    cc-options:           -O3 -march=native
     -- cc-options:           -march=native -ftree-vectorize
     extra-libraries:      c
     if os(linux)

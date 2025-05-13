@@ -32,8 +32,7 @@ int thread_join(pthread_t thread, void **retval) {
   return pthread_join(thread, retval);
 }
 
-// const int TPC = get_num_threads(); // don't enable this, change the enum
-// below
+//const int TPC = get_num_threads(); // don't enable this, change the enum below
 
 // Constants
 #define VAR 0x01
@@ -95,12 +94,12 @@ typedef union {
 } TypeConverter;
 
 // Global heap
-static u64 *BUFF = NULL; // NOTE: intentionally *not* atomic ptr.
+static u64 *BUFF = NULL;  // NOTE: intentionally *not* atomic ptr.
 
 // Heap configuration options
 enum : u64 {
   // 1GiB heap
-  HEAP_1GB = (1ULL << 27) * sizeof(u64), // 128Mi * 8 bytes = 1GiB
+  HEAP_1GB = (1ULL << 27) * sizeof(u64),  // 128Mi * 8 bytes = 1GiB
 
   //////////////////////////
   // Choose a heap size here
@@ -117,10 +116,11 @@ enum : u64 {
   // Various redex bag starting indices within the heap to choose from.
   // The remaining percentage is used for node storage.
 
-  // Cache-aligned and named for the percentage of heap used.
+  // Named for the percentage of heap used.
   RBAG_25_PCT = (HEAP_SIZE / 4),
   RBAG_50_PCT = (HEAP_SIZE / 2),
   RBAG_75_PCT = (HEAP_SIZE - (HEAP_SIZE / 4)),
+  // TODO: something like: RBAG_1024_DEX, for 1024 redex per thread
 
   ////////////////////////////////////
   // Choose a RBAG size here
@@ -130,11 +130,11 @@ enum : u64 {
 
 enum : u32 {
   // Final calculated RBAG index
-  RBAG = (HEAP_SIZE - RBAG_SIZE) / sizeof(u64),
+  RBAG = ((HEAP_SIZE - RBAG_SIZE) / sizeof(u64)) & ~7U, // CLINE_U64 - 1
 
   // Calculate RBAG_LEN and NODE_LEN: number of u64 elements *per thread*
   // TODO: MUST be 16-byte aligned. 64-byte alignment might be preferable.
-  RBAG_LEN = (RBAG_SIZE / (TPC * sizeof(u64))) & ~15U,
+  RBAG_LEN = (RBAG_SIZE / (TPC * sizeof(u64))) & ~7U, // CLINE_U64 - 1
   NODE_LEN = (HEAP_SIZE - RBAG_SIZE) / (TPC * sizeof(u64))
 };
 
@@ -160,12 +160,16 @@ typedef struct Book {
 } Book;
 
 // TODO: net_reset()
-static Net net = {.nods = 0, .itrs = 0, .idle = 0};
+static Net net = {
+  .nods = 0,
+  .itrs = 0,
+  .idle = 0
+};
 
 static Book BOOK = {
-    .defs = NULL,
-    .len = 0,
-    .cap = 0,
+  .defs = NULL,
+  .len = 0,
+  .cap = 0,
 };
 
 const Term VOID = 0;
@@ -230,11 +234,17 @@ void free_static_tms() {
 }
 
 // Pair operations
-static Pair pair_new(Term neg, Term pos) { return ((Pair)pos << 64) | neg; }
+static Pair pair_new(Term neg, Term pos) {
+  return ((Pair)pos << 64) | neg;
+}
 
-static Term pair_pos(Pair pair) { return (pair >> 64) & 0xFFFFFFFFFFFFFFFF; }
+static Term pair_pos(Pair pair) {
+  return (pair >> 64) & 0xFFFFFFFFFFFFFFFF;
+}
 
-static Term pair_neg(Pair pair) { return pair & 0xFFFFFFFFFFFFFFFF; }
+static Term pair_neg(Pair pair) {
+  return pair & 0xFFFFFFFFFFFFFFFF;
+}
 
 // Term operations
 Term term_new(Tag tag, Lab lab, Loc loc) {
@@ -257,13 +267,12 @@ static bool term_has_loc(Term term) {
 }
 
 static Term term_offset_loc(Term term, Loc offset) {
-  if (!term_has_loc(term)) {
-    return term;
-  }
+  if (!term_has_loc(term)) { return term; }
   Loc loc = term_loc(term) + offset;
   return term_with_loc(term, loc);
 }
 
+//#define DEBUG
 static int mop_debug = 0; // memory operations
 static int thd_debug = 0; // threading
 
@@ -271,7 +280,7 @@ static _Thread_local int thread_id = 0;
 
 #define TERMSTR_BUFSIZ 128
 
-static const char *term_str(char *buf, Term term) {
+static const char* term_str(char* buf, Term term) {
   sprintf(buf, "%s lab:%u loc:%u", tag_to_str(term_tag(term)),
           (int)term_lab(term), (int)term_loc(term));
   return buf;
@@ -281,75 +290,83 @@ static bool good_loc(Loc loc) { return true; }
 
 // Memory operations
 Term swap(Loc loc, Term term) {
-  Term res =
-      atomic_exchange_explicit((a64 *)&BUFF[loc], term, memory_order_relaxed);
+  Term res = atomic_exchange_explicit((a64*)&BUFF[loc], term, memory_order_relaxed);
 
+#ifdef DEBUG
   if (mop_debug && good_loc(loc)) {
     char buf1[TERMSTR_BUFSIZ];
     char buf2[TERMSTR_BUFSIZ];
     fprintf(stderr, "%d swap %u %s with %s\n", thread_id, loc,
-            term_str(buf1, res), term_str(buf2, term));
+        term_str(buf1, res), term_str(buf2, term));
   }
+#endif
 
   return res;
 }
 
 Term get(Loc loc) {
-  Term term = atomic_load_explicit((a64 *)&BUFF[loc], memory_order_relaxed);
+  Term term = atomic_load_explicit((a64*)&BUFF[loc], memory_order_relaxed);
 
+#ifdef DEBUG
   if (mop_debug && good_loc(loc)) {
     char buf[TERMSTR_BUFSIZ];
     fprintf(stderr, "%d get %u %s\n", thread_id, loc, term_str(buf, term));
   }
+#endif
 
   return term;
 }
 
 Term take(Loc loc) {
-  Term term =
-      atomic_exchange_explicit((a64 *)&BUFF[loc], VOID, memory_order_relaxed);
+  Term term = atomic_exchange_explicit((a64*)&BUFF[loc], VOID, memory_order_relaxed);
 
+#ifdef DEBUG
   if (mop_debug && good_loc(loc)) {
     char buf[TERMSTR_BUFSIZ];
     fprintf(stderr, "%d take %u %s\n", thread_id, loc, term_str(buf, term));
   }
+#endif
 
   return term;
 }
 
 void set(Loc loc, Term term) {
-  atomic_store_explicit((a64 *)&BUFF[loc], term, memory_order_relaxed);
+  atomic_store_explicit((a64*)&BUFF[loc], term, memory_order_relaxed);
 
+#ifdef DEBUG
   if (mop_debug && good_loc(loc)) {
     char buf[TERMSTR_BUFSIZ];
     fprintf(stderr, "%d set %u %s\n", thread_id, loc, term_str(buf, term));
   }
+#endif
 }
 
 static Pair take_pair(Loc loc) {
-  Pair pair = __atomic_exchange_n((Pair *)&BUFF[loc], 0ULL, __ATOMIC_RELAXED);
-
+    Pair pair;
+    pair = atomic_exchange_explicit((a64*)&BUFF[loc], 0, memory_order_relaxed);
+    pair |= (Pair)atomic_exchange_explicit((a64*)&BUFF[loc + 1], 0, memory_order_relaxed) << 64;
+    return pair;
+#ifdef DEBUG
   if (mop_debug) {
     char buf[TERMSTR_BUFSIZ];
-    fprintf(stderr, "%d take.neg %u %s\n", thread_id, loc,
-            term_str(buf, pair_neg(pair)));
-    fprintf(stderr, "%d take.pos %u %s\n", thread_id, loc + 1,
-            term_str(buf, pair_pos(pair)));
+    fprintf(stderr, "%d take.neg %u %s\n", thread_id, loc, term_str(buf, pair_neg(pair)));
+    fprintf(stderr, "%d take.pos %u %s\n", thread_id, loc + 1, term_str(buf, pair_pos(pair)));
   }
+#endif
 
   return pair;
 }
 
 static void set_pair(Loc loc, Pair pair) {
-  __atomic_store_n((Pair *)&BUFF[loc], pair, __ATOMIC_RELAXED);
+  __atomic_store_n((Pair*)&BUFF[loc], pair, __ATOMIC_RELAXED);
 
+#ifdef DEBUG
   if (mop_debug) {
     char buf[TERMSTR_BUFSIZ];
-    fprintf(stderr, "%d set.neg %u %s\n", thread_id, loc,
-            term_str(buf, pair_neg(pair)));
-    fprintf(stderr, "%d set.pos %u %s\n", thread_id, loc + 1,
-            term_str(buf, pair_pos(pair)));
+    fprintf(stderr, "%d set.neg %u %s\n", thread_id, loc, term_str(buf, pair_neg(pair)));
+    fprintf(stderr, "%d set.pos %u %s\n", thread_id, loc + 1, term_str(buf, pair_pos(pair)));
   }
+#endif
 }
 
 static Loc port(u64 n, Loc loc) { return n + loc - 1; }
@@ -358,9 +375,11 @@ static Loc port(u64 n, Loc loc) { return n + loc - 1; }
 // ---------
 
 static Loc node_alloc(TM *tm, u32 num) {
+#ifdef DEBUG
   if (mop_debug) {
     fprintf(stderr, "%u alloc %u nodes at %u\n", tm->tid, num, tm->nput);
   }
+#endif
 
   if (tm->nput + num >= NODE_LEN) {
     fprintf(stderr, "node space exhausted\n");
@@ -373,26 +392,27 @@ static Loc node_alloc(TM *tm, u32 num) {
 }
 
 static void rbag_push(TM *tm, Term neg, Term pos) {
-#if 1 || defined(DEBUG)
+  #if 1 || defined(DEBUG)
   bool free_global = tm->rput < RBAG_LEN - 1;
   if (!free_global) {
     fprintf(stderr, "rbag space exhausted\n");
     exit(1);
   }
-#endif
+  #endif
 
   Loc loc = RBAG + tm->tid * RBAG_LEN + tm->rput;
 
+#ifdef DEBUG
   if (0 && mop_debug) {
-    fprintf(stderr, "%u calling set_pair @ %u, rput %u\n", tm->tid, loc,
-            tm->rput);
+    fprintf(stderr, "%u calling set_pair @ %u, rput %u\n", tm->tid, loc, tm->rput);
   }
+#endif
 
   set_pair(loc, pair_new(neg, pos));
   tm->rput += 2;
 }
 
-static Pair rbag_pop(TM *tm) {
+static Pair rbag_pop(TM* tm) {
   if (tm->rput > 0) {
     tm->rput -= 2;
     return RBAG + tm->tid * RBAG_LEN + tm->rput;
@@ -414,13 +434,13 @@ void hvm_init() {
 
   alloc_static_tms();
 
-#if 0
+  #if 0 
   fprintf(stderr, "HEAP_SIZE = %" PRIu64 "\n", HEAP_SIZE);
   fprintf(stderr, "RBAG_SIZE = %" PRIu64 "\n", RBAG_SIZE);
   fprintf(stderr, "RBAG      = %u\n", RBAG);
   fprintf(stderr, "RBAG_LEN  = %u\n", RBAG_LEN);
   fprintf(stderr, "NODE_LEN  = %u\n", NODE_LEN);
-#endif
+  #endif
 }
 
 void hvm_free() {
@@ -440,9 +460,13 @@ Loc ffi_alloc_node(u64 arity) {
   return loc;
 }
 
-void ffi_rbag_push(Term neg, Term pos) { rbag_push(tms[0], neg, pos); }
+void ffi_rbag_push(Term neg, Term pos) {
+  rbag_push(tms[0], neg, pos);
+}
 
-u64 inc_itr() { return atomic_load(&net.itrs); }
+u64 inc_itr() {
+  return atomic_load(&net.itrs);
+} 
 
 Loc rbag_ini() {
   // TODO
@@ -454,7 +478,9 @@ Loc rbag_end() {
   return RBAG;
 }
 
-Loc rnod_end() { return net.nods; }
+Loc rnod_end() {
+  return net.nods;
+}
 
 // Moves the global buffer and redex bag into a new def and resets
 // the global buffer and redex bag.
@@ -473,10 +499,8 @@ void def_new(char *name) {
 
   Loc rbag_end = tm->rput;
   Loc rnod_end = tm->nput;
-  size_t rbag_siz =
-      ((sizeof(Term) * rbag_end) + CLINE_BYTES - 1) & ~(CLINE_BYTES - 1);
-  size_t rnod_siz =
-      ((sizeof(Term) * rnod_end) + CLINE_BYTES - 1) & ~(CLINE_BYTES - 1);
+  size_t rbag_siz = ((sizeof(Term) * rbag_end) + CLINE_BYTES - 1) & ~(CLINE_BYTES - 1);
+  size_t rnod_siz = ((sizeof(Term) * rnod_end) + CLINE_BYTES - 1) & ~(CLINE_BYTES - 1);
 
   Def def = {
       .name = name,
@@ -512,62 +536,47 @@ char *def_name(Loc def_idx) { return BOOK.defs[def_idx].name; }
 // offset by the index where in the BUFF it was expanded.
 //
 // Returns the ref's root, the first node in its data.
-
 static Term expand_ref(TM *tm, Loc def_idx) {
-  const Def *def = &BOOK.defs[def_idx];
+  // Get definition data
+  const Def* def = &BOOK.defs[def_idx];
+  const u32 nodes_len = def->nodes_len;
   const Term *nodes = def->nodes;
   const Term *rbag = def->rbag;
-  const u32 nodes_len = def->nodes_len;
   const u32 rbag_len = def->rbag_len;
 
+  // offset calculation must occur before node_alloc() call
   Loc offset = (tm->tid * NODE_LEN) + tm->nput - 1;
 
-  // if (mop_debug) {
-  //   fprintf(stderr, "%u expand_ref %u nodes %u rbag %u offset %u\n",
-  //           tm->tid, def_idx, nodes_len, rbag_len, offset);
-  // }
+#ifdef DEBUG
+  if (mop_debug) {
+    fprintf(stderr, "%u expand_ref %u nodes %u rbag %u offset %u\n", tm->tid,
+        def_idx, nodes_len, rbag_len, offset);
+  }
+#endif
 
   node_alloc(tm, nodes_len - 1);
+
   Term root = term_offset_loc(nodes[0], offset);
 
-  const u32 CHUNK_SIZE = 8;
-  u32 i = 1;
-
-  for (; i + CHUNK_SIZE - 1 < nodes_len; i += CHUNK_SIZE) {
-    if (i + CHUNK_SIZE * 2 < nodes_len) {
-      __builtin_prefetch(&nodes[i + CHUNK_SIZE], 0, 0);
-    }
-
-    for (u32 j = 0; j < CHUNK_SIZE; ++j) {
-      Loc loc = offset + i + j;
-      Term term = term_offset_loc(nodes[i + j], offset);
-      BUFF[loc] = term;
-    }
-  }
-
-  // Tail loop: handle remaining nodes
-  for (; i < nodes_len; ++i) {
+  // No redexes reference these nodes yet; therefore, safe to add un-atomically.
+  for (u32 i = 1; i < nodes_len; i++) {
     Loc loc = offset + i;
     Term term = term_offset_loc(nodes[i], offset);
     BUFF[loc] = term;
 
+#ifdef DEBUG
     if (mop_debug) {
       char buf[TERMSTR_BUFSIZ];
       fprintf(stderr, "%u node %u %s\n", tm->tid, loc, term_str(buf, term));
     }
+#endif
   }
 
-  const u32 PREFETCH_DIST = 8; // Prefetch 4 pairs (8 Terms)
   for (u32 i = 0; i < rbag_len; i += 2) {
-    if (i + PREFETCH_DIST < rbag_len) {
-      __builtin_prefetch(&rbag[i + PREFETCH_DIST], 0, 0);
-    }
-
     Term neg = term_offset_loc(rbag[i], offset);
     Term pos = term_offset_loc(rbag[i + 1], offset);
     rbag_push(tm, neg, pos);
   }
-
   return root;
 }
 
@@ -984,8 +993,7 @@ static void interact_matnul(TM *tm, Loc a_loc, Lab mat_len) {
   }
 }
 
-static void interact_matnum(TM *tm, Loc mat_loc, Lab mat_len, u32 n,
-                            Tag n_type) {
+static void interact_matnum(TM *tm, Loc mat_loc, Lab mat_len, u32 n, Tag n_type) {
   if (n_type != U32) {
     fprintf(stderr, "match with non-U32\n");
     exit(1);
@@ -1077,8 +1085,7 @@ static void interact(TM *tm, Term neg, Term pos) {
   case APP:
     switch (pos_tag) {
     case LAM:
-      interact_applam(tm, neg_loc, pos_loc);
-      break;
+      interact_applam(tm, neg_loc, pos_loc); break;
     case NUL:
       interact_appnul(tm, neg_loc);
       break;
@@ -1197,7 +1204,7 @@ static void interact(TM *tm, Term neg, Term pos) {
   tm->itrs += 1;
 }
 
-static inline bool sequential_step(TM *tm) {
+static inline bool sequential_step(TM* tm) {
   Loc loc = rbag_pop(tm);
 
   if (loc == 0) {
@@ -1214,16 +1221,13 @@ a64 a_reached = 0; // number of threads that reached the current barrier
 a64 a_barrier = 0; // number of barriers passed during this program
 static void sync_threads() {
   u64 barrier_old = atomic_load_explicit(&a_barrier, memory_order_relaxed);
-  if (atomic_fetch_add_explicit(&a_reached, 1, memory_order_relaxed) ==
-      (TPC - 1)) {
-    // Last thread to reach the barrier resets the counter and advances the
-    // barrier
+  if (atomic_fetch_add_explicit(&a_reached, 1, memory_order_relaxed) == (TPC - 1)) {
+    // Last thread to reach the barrier resets the counter and advances the barrier
     atomic_store_explicit(&a_reached, 0, memory_order_relaxed);
     atomic_store_explicit(&a_barrier, barrier_old + 1, memory_order_release);
   } else {
     u32 tries = 0;
-    while (atomic_load_explicit(&a_barrier, memory_order_acquire) ==
-           barrier_old) {
+    while (atomic_load_explicit(&a_barrier, memory_order_acquire) == barrier_old) {
       sched_yield();
     }
   }
@@ -1235,6 +1239,7 @@ static bool set_idle(bool was_busy) {
     if (thd_debug) {
       fprintf(stderr, "%u set idle, was idle= %u\n", thread_id, idle);
     }
+
   }
   return false;
 }
@@ -1249,32 +1254,30 @@ static bool set_busy(bool was_busy) {
   return true;
 }
 
-static u32 choose_victim(TM *tm) { return (tm->tid - 1) % TPC; }
+static u32 choose_victim(TM *tm) {
+  return (tm->tid - 1) % TPC;
+}
 
 static bool try_steal(TM *tm) {
   u32 sid = choose_victim(tm);
   Loc loc = 0;
 
-retry:
+ retry:
   loc = RBAG + sid * RBAG_LEN + tm->sidx;
 
   if (thd_debug) {
     fprintf(stderr, "%u try stealing from %u @ %u : %u\n", tm->tid, sid,
-            tm->sidx, loc);
+        tm->sidx, loc);
   }
 
   Pair got = take_pair(loc);
 
   if (got != 0) {
-    if (thd_debug) {
-      fprintf(stderr, "%u success, pushing...\n", tm->tid);
-    }
+    if (thd_debug) { fprintf(stderr, "%u success, pushing...\n", tm->tid); }
 
     rbag_push(tm, pair_neg(got), pair_pos(got));
 
-    if (thd_debug) {
-      fprintf(stderr, "%u steal done\n", tm->tid);
-    }
+    if (thd_debug) { fprintf(stderr, "%u steal done\n", tm->tid); }
 
     tm->slst = tm->sidx;
     tm->sidx += 2;
@@ -1282,34 +1285,32 @@ retry:
 
     return true;
   } else {
-    if (thd_debug) {
-      fprintf(stderr, "%u steal failed\n", tm->tid);
-    }
+    if (thd_debug) { fprintf(stderr, "%u steal failed\n", tm->tid); }
 
     tm->sbad++;
 
-// The logic here, is that since we know the index of our last successful
-// steal, we should always trying stealing up to at least that index (-2).
-//
-// Because that index is where the owning thread *may* have pushed it's
-// next redex.
-//
-// That, and no yields() while we attempt up to that index. Only yield
-// when we reset to zero.
-//
-// It's entirely possible i've introduced a race condition with this logic;
-// it should be considered experimental and not thoroughly tested.
-//
-// If you ever randomly see a result like "v12345", it's may be due to this.
-//
-#define STABLE // to make it more stable
-//
-#ifndef STABLE
+    // The logic here, is that since we know the index of our last successful
+    // steal, we should always trying stealing up to at least that index (-2).
+    //
+    // Because that index is where the owning thread *may* have pushed it's
+    // next redex.
+    //
+    // That, and no yields() while we attempt up to that index. Only yield
+    // when we reset to zero.
+    //
+    // It's entirely possible i've introduced a race condition with this logic;
+    // it should be considered experimental and not thoroughly tested.
+    //
+    // If you ever randomly see a result like "v12345", it's may be due to this.
+    //
+    #define STABLE // to make it more stable
+    //
+    #ifndef STABLE
     if (tm->sidx + 2 < tm->slst) {
       tm->sidx += 2;
       goto retry;
     } else
-#endif
+    #endif
       tm->sidx = 0;
 
     return false;
@@ -1320,7 +1321,7 @@ static bool check_timeout(u32 tick) {
   if (tick % 256 == 0) {
     u32 idle = atomic_load_explicit(&net.idle, memory_order_relaxed);
     if (idle == TPC) {
-      return true;
+     return true;
     }
     if (thd_debug) {
       fprintf(stderr, "%u idle, total: %u\n", thread_id, idle);
@@ -1329,13 +1330,13 @@ static bool check_timeout(u32 tick) {
   return false;
 }
 
-static void *thread_func(void *arg) {
+static void* thread_func(void* arg) {
   thread_id = (u64)arg;
   TM *tm = tms[thread_id];
 
-  // sync_threads();
+  //sync_threads();
 
-  u32 tick = 0;
+  u32  tick = 0;
   bool busy = tm->tid == 0;
   while (true) {
     tick += 1;
@@ -1350,33 +1351,31 @@ static void *thread_func(void *arg) {
     } else {
       busy = set_idle(busy);
 
-      if (try_steal(tm))
-        continue;
+      if (try_steal(tm)) continue;
 
       sched_yield();
 
-      if (check_timeout(tick))
-        break;
+      if (check_timeout(tick)) break;
     }
   }
 
   atomic_fetch_add(&net.nods, tm->nput);
   atomic_fetch_add(&net.itrs, tm->itrs);
 
-  // if (1) {
-  // fprintf(stderr, "t%u: %" PRIu64 " itrs, steals: %u good %u bad\n",
-  // tm->tid, tm->itrs, tm->sgud, tm->sbad);
-  // }
+  if (0) {
+    fprintf(stderr, "t%u: %" PRIu64 " itrs, steals: %u good %u bad\n",
+            tm->tid, tm->itrs, tm->sgud, tm->sbad);
+  }
 
-  // if (thd_debug) {
-  // fprintf(stderr, "%u before sync...\n", tm->tid);
-  // }
+  if (thd_debug) {
+    fprintf(stderr, "%u before sync...\n", tm->tid);
+  }
 
   // sync_threads();
 
-  // if (thd_debug) {
-  // fprintf(stderr, "%u after sync done\n", tm->tid);
-  // }
+  if (thd_debug) {
+    fprintf(stderr, "%u after sync done\n", tm->tid);
+  }
 
   return NULL;
 }
@@ -1388,7 +1387,7 @@ static void parallel_normalize() {
   atomic_store_explicit(&net.idle, TPC - 1, memory_order_relaxed);
 
   for (u64 i = 0; i < TPC; i++) {
-    int rc = thread_create(&threads[i], NULL, thread_func, (void *)i);
+    int rc = thread_create(&threads[i], NULL, thread_func, (void*)i);
   }
 
   for (u64 i = 0; i < TPC; i++) {
@@ -1408,7 +1407,8 @@ Term normalize(Term term) {
     TM *tm = tms[0];
     while (sequential_step(tm))
       ;
-    atomic_fetch_add(&net.nods, tm->nput);
+    net.nods = tm->nput;
+    net.itrs = tm->itrs;
   } else {
     parallel_normalize();
   }
@@ -1460,7 +1460,7 @@ static char *tag_to_str(Tag tag) {
 void dump_term(Loc loc) {
   Term term = get(loc);
   printf("%06X %03X %03X %s\n", loc, term_loc(term), term_lab(term),
-         tag_to_str(term_tag(term)));
+      tag_to_str(term_tag(term)));
 }
 
 // FILE VERSION: (or you can >> the stdio into a file)
@@ -1512,11 +1512,11 @@ void dump_buff(TM *tm) {
   for (Loc idx = 0; idx < tm->nput; idx++) {
     Loc loc = tm->tid * NODE_LEN + idx;
     dump_term(loc);
-    /*
-        Term term = get(loc);
-        printf("%06X %03X %03X %s\n", loc, term_loc(term), term_lab(term),
-            tag_to_str(term_tag(term)));
-    */
+/*
+    Term term = get(loc);
+    printf("%06X %03X %03X %s\n", loc, term_loc(term), term_lab(term),
+        tag_to_str(term_tag(term)));
+*/
   }
   printf("------------------\n");
   printf("    REDEX BAG\n");

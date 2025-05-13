@@ -58,9 +58,9 @@ cliRun filePath showStats = do
     len <- rnodEnd
     let mips = (fromIntegral itr / 1000000.0) / (((timeInMs))/ 1000.0)
     putStrLn $ "ITRS: " ++ show itr
-    putStrLn $ "INTERACTION TIME: " ++ show timeInMs ++ "ms"
+    putStrLn $ "TIME: " ++ show (truncate timeInMs) ++ "ms"
     putStrLn $ "SIZE: " ++ show len
-    putStrLn $ "MIPS: " ++ show mips
+    putStrLn $ "MIPS: " ++ show (truncate mips)
 
   hvmFree
 
