@@ -342,10 +342,8 @@ void set(Loc loc, Term term) {
 }
 
 static Pair take_pair(Loc loc) {
-    Pair pair;
-    pair = atomic_exchange_explicit((a64*)&BUFF[loc], 0, memory_order_relaxed);
-    pair |= (Pair)atomic_exchange_explicit((a64*)&BUFF[loc + 1], 0, memory_order_relaxed) << 64;
-    return pair;
+  Pair pair = __atomic_exchange_n((Pair*)&BUFF[loc], 0ULL, __ATOMIC_RELAXED);
+
 #ifdef DEBUG
   if (mop_debug) {
     char buf[TERMSTR_BUFSIZ];
