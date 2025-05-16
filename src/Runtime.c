@@ -1561,10 +1561,10 @@ static void* thread_func(void* arg) {
   atomic_fetch_add(&net.nods, tm->nput);
   atomic_fetch_add(&net.itrs, tm->itrs);
 
-  if (1) {
-    fprintf(stderr, "t%u: %" PRIu64 " itrs, rput: %u, bput: %u, bpop: %u, steals: %u good %u bad\n",
-            tm->tid, tm->itrs, tm->rput, tm->bput, tm->bpop, tm->sgud, tm->sbad);
-  }
+  // if (1) {
+    // fprintf(stderr, "t%u: %" PRIu64 " itrs, rput: %u, bput: %u, bpop: %u, steals: %u good %u bad\n",
+            // tm->tid, tm->itrs, tm->rput, tm->bput, tm->bpop, tm->sgud, tm->sbad);
+  // }
   return NULL;
 }
 
