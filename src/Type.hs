@@ -154,6 +154,9 @@ foreign import ccall unsafe "Runtime.c normalize"
 foreign import ccall unsafe "Runtime.c dump_buff"
   dumpBuff :: IO ()
 
+foreign import ccall unsafe "Runtime.c handle_failure"
+  callFailureHandler :: IO ()
+
 -- Convenience Functions
 
 termOper :: Term -> Oper

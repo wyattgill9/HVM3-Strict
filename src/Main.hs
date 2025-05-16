@@ -50,7 +50,10 @@ cliRun filePath showStats = do
   end <- getTime Monotonic
     
   net <- extractNet term
-  putStrLn $ netToString net
+  let str = netToString net
+  putStrLn $ str
+  when (not (null str) && head str == 'v') $ do
+    callFailureHandler
 
   when showStats $ do
     let timeInMs = fromIntegral (toNanoSecs (diffTimeSpec end start)) / 1000000 :: Double
