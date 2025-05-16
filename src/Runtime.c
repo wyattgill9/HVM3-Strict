@@ -354,8 +354,8 @@ Term get(Loc loc) {
 }
 
 Term take(Loc loc) {
-  Term term = BUFF[loc]; // non-atomic load
-  BUFF[loc] = VOID;      // non-atomic store
+  Term term =
+      atomic_exchange_explicit((a64 *)&BUFF[loc], VOID, memory_order_relaxed);
 
 #ifdef DEBUG
   if (mop_debug) {
@@ -368,7 +368,7 @@ Term take(Loc loc) {
 }
 
 void set(Loc loc, Term term) {
-  BUFF[loc] = term; // non-atomic store
+  atomic_store_explicit((a64 *)&BUFF[loc], term, memory_order_relaxed);
 
 #ifdef DEBUG
   if (mop_debug) {
@@ -377,6 +377,7 @@ void set(Loc loc, Term term) {
   }
 #endif
 }
+
 static Pair take_pair(Loc loc) {
   Pair pair = *(Pair *)&BUFF[loc];
 
