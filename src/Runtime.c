@@ -135,7 +135,7 @@ enum : u32 {
   NODE_LEN = (HEAP_SIZE - RBAG_SIZE) / (TPC * sizeof(u64)),
 
   // Booty-bag length in u64 elements
-  BBAG_LEN = 40
+  BBAG_LEN = 400
 };
 
 typedef struct Net {
@@ -427,10 +427,12 @@ static Loc node_alloc(TM *tm, u32 num) {
   }
 #endif
 
-  if ((num & 1) == 1) {
-    num += 1;
-  }
+  // if ((num & 1) == 1) {
+  //   num += 1;
+  // }
 
+  num += num & 1; 
+  
   if (tm->nput + num >= NODE_LEN) {
     fprintf(stderr, "node space exhausted\n");
     exit(1);
