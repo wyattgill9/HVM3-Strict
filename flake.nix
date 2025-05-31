@@ -16,7 +16,7 @@
           buildInputs = with pkgs; [
                 haskell.compiler.ghc912
                 haskellPackages.cabal-install 
-                haskellPackages.haskell-language-server
+                # haskellPackages.haskell-language-server
 
                 # clang
                 # clangd

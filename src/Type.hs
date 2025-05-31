@@ -130,13 +130,13 @@ foreign import ccall unsafe "Runtime.c set"
 foreign import ccall unsafe "Runtime.c ffi_rbag_push"
   rbagPush :: Term -> Term -> IO ()
 
-foreign import ccall unsafe "Runtime.c rbag_ini"
+foreign import ccall unsafe "Runtime.c ffi_rbag_ini"
   rbagIni :: IO Loc
 
-foreign import ccall unsafe "Runtime.c rbag_end"
+foreign import ccall unsafe "Runtime.c ffi_rbag_end"
   rbagEnd :: IO Loc
 
-foreign import ccall unsafe "Runtime.c rnod_end"
+foreign import ccall unsafe "Runtime.c ffi_rnod_end"
   rnodEnd :: IO Loc
 
 -- foreign import ccall unsafe "Runtime.c take"
