@@ -17,6 +17,10 @@
                 haskell.compiler.ghc912
                 haskellPackages.cabal-install 
                 haskellPackages.haskell-language-server
+
+                # clang
+                # clangd
+                # gdb
           ];
 
           shellHook = ''
