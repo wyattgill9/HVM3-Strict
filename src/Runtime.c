@@ -16,8 +16,8 @@
 #include <string.h>
 #include <unistd.h>
 
-//#define SUMMARY
-//#define DEBUG
+// #define SUMMARY
+// #define DEBUG
 
 #define DEBUG_LOG(fmt, ...) fprintf(stderr, "[DEBUG] " fmt "\n", ##__VA_ARGS__)
 
@@ -71,12 +71,14 @@ __asm__(
 
 // Types
 typedef uint8_t      u8;
+typedef int16_t       u16;
 typedef int32_t      i32;
 typedef uint32_t     u32;
 typedef _Atomic(u32) a32;
 typedef float        f32;
 typedef int64_t      i64;
 typedef uint64_t     u64;
+typedef double       f64;
 typedef _Atomic(u64) a64;
 typedef unsigned __int128 u128 __attribute__((aligned(16)));
 
@@ -101,9 +103,9 @@ typedef u128 Pair; // Term | Term
 
 // Using union for type punning (safer in C)
 typedef union {
-  u32 u;
-  i32 i;
-  f32 f;
+  u64 u;
+  i64 i;
+  f64 f;
 } TypeConverter;
 
 // Heap configuration options
@@ -188,7 +190,7 @@ typedef struct Book {
 
 // Local Thread Memory
 typedef struct TM {
-  u32 tid;   // thread id
+  u16 tid;   // thread id
   Loc nput;  // next node allocation attempt index
   Loc rput;  // next rbag push index
   Loc bput;  // owned bbag push index
@@ -358,7 +360,7 @@ static Term term_offset_loc(Term term, Loc offset) {
   return term_with_loc(term, loc);
 }
 
-static Loc port(u32 n, Loc loc) { return n + loc - 1; }
+static Loc port(u64 n, Loc loc) { return n + loc - 1; }
 
 // Memory operations
 Term swap(Loc loc, Term term) {
@@ -925,36 +927,36 @@ static void interact_opynul(TM *tm, Loc a_loc) {
 }
 
 // Safer Utilities
-u32 u32_to_u32(u32 u) { return u; }
+// u32 u32_to_u32(u32 u) { return u; }
 
-i32 u32_to_i32(u32 u) {
+i64 u64_to_i64(u64 u) {
   TypeConverter converter;
   converter.u = u;
   return converter.i;
 }
 
-f32 u32_to_f32(u32 u) {
+f64 u64_to_f64(u64 u) {
   TypeConverter converter;
   converter.u = u;
   return converter.f;
 }
 
-u32 i32_to_u32(i32 i) {
+u64 i64_to_u64(i64 i) {
   TypeConverter converter;
   converter.i = i;
   return converter.u;
 }
 
-u32 f32_to_u32(f32 f) {
+u64 f64_to_u64(f64 f) {
   TypeConverter converter;
   converter.f = f;
   return converter.u;
 }
 
 static void interact_opynum(TM *tm, Loc a_loc, Lab op, u32 y, Tag y_type) {
-  u32 x = term_loc(take(port(1, a_loc)));
+  u64 x = term_loc(take(port(1, a_loc)));
   Loc ret = port(2, a_loc);
-  u32 res = 0;
+  u64 res = 0;
 
   // Optimized path using jump table & direct compute
   if (y_type == U32) {
@@ -1024,8 +1026,8 @@ static void interact_opynum(TM *tm, Loc a_loc, Lab op, u32 y, Tag y_type) {
     // Inlined type conversion and operation for i32 and f32
     switch (y_type) {
     case I32: {
-      i32 a = u32_to_i32(x);
-      i32 b = u32_to_i32(y);
+      i32 a =(x);
+      i32 b = u64_to_i64(y);
       i32 val;
       switch (op) {
       case OP_ADD:
@@ -1079,12 +1081,12 @@ static void interact_opynum(TM *tm, Loc a_loc, Lab op, u32 y, Tag y_type) {
       default:
         val = 0;
       }
-      res = i32_to_u32(val);
+      res = i64_to_u64(val);
       break;
     }
     case F32: {
-      f32 a = u32_to_f32(x);
-      f32 b = u32_to_f32(y);
+      f32 a = u64_to_f64(x);
+      u32 b = u64_to_f64(y);
       f32 val;
       switch (op) {
       case OP_ADD:
@@ -1120,7 +1122,7 @@ static void interact_opynum(TM *tm, Loc a_loc, Lab op, u32 y, Tag y_type) {
       default:
         val = 0;
       }
-      res = f32_to_u32(val);
+      res = f64_to_u64(val);
       break;
     }
     }
