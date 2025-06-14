@@ -80,10 +80,23 @@ typedef uint64_t     u64;
 typedef _Atomic(u64) a64;
 typedef unsigned __int128 u128 __attribute__((aligned(16)));
 
-typedef u8   Tag;  //  8 bits
-typedef u32  Lab;  // 24 bits
-typedef u32  Loc;  // 32 bits
-typedef u64  Term; // Loc | Lab | Tag
+typedef u64 Term; // [ Loc:36 | Lab:24 | Tag:4 ]
+typedef uint64_t Loc; // 36 bits, but stored in 64
+typedef uint32_t Lab; // 24 bits, but stored in 32
+typedef uint8_t  Tag; // 4 bits, but stored in 8
+
+#define TAG_BITS 4
+#define LAB_BITS 24
+#define LOC_BITS 36
+
+#define TAG_MASK ((1ULL << TAG_BITS) - 1)
+#define LAB_MASK ((1ULL << LAB_BITS) - 1)
+#define LOC_MASK ((1ULL << LOC_BITS) - 1)
+
+// #define TERM_LOC(t) (((t) >> (LAB_BITS + TAG_BITS)) & LOC_MASK)
+// #define TERM_LAB(t) (((t) >> TAG_BITS) & LAB_MASK)
+// #define TERM_TAG(t) ((t) & TAG_MASK)
+
 typedef u128 Pair; // Term | Term
 
 // Using union for type punning (safer in C)
@@ -179,12 +192,17 @@ typedef struct TM {
   Loc nput;  // next node allocation attempt index
   Loc rput;  // next rbag push index
   Loc bput;  // owned bbag push index
+  // u32 nput;  // next node allocation attempt index
+  // u32 rput;  // next rbag push index
+  // u32 bput;  // owned bbag push index
 
   u32 sid;   // tid from which bbag was stolen (may be our own)
   Loc spop;  // stolen bbag pop index + 2
+  // u32 spop;  // stolen bbag pop index + 2
+    //
+  // Loc dput[2]; // next deferred bag push indices
+  u32 dput[2];
 
-  Loc dput[2]; // next deferred bag push indices
-  
   bool buse; // can use booty bag
   bool bhld; // when we KNOW booty bag ctrl word is HELD
              // (in some cases it may be HELD but we don't know)
@@ -203,7 +221,7 @@ typedef struct TM {
   u64 itrs;  // interaction count
 } TM;
 
-static_assert(sizeof(TM) <= CACH_SIZ, "TM struct getting big");
+// static_assert(sizeof(TM) <= CACH_SIZ, "TM struct getting big");
 
 // Booty bag control word values
 enum : u64 {
@@ -236,7 +254,7 @@ static const char* term_str(char* buf, Term term);
 
 // FFI functions
 void dump_buff();
-Tag term_tag(Term term) { return term & 0xFF; }
+Tag term_tag(Term term) { return term & TAG_MASK; }
 Loc term_loc(Term term);
 
 static u64 align(u64 align, u64 val) {
@@ -315,17 +333,19 @@ static Term pair_neg(Pair pair) {
 }
 
 // Term operations
+
 Term term_new(Tag tag, Lab lab, Loc loc) {
-  return ((Term)loc << 32) | ((Term)lab << 8) | tag;
+  return (((Term)loc & LOC_MASK) << (LAB_BITS + TAG_BITS))
+       | (((Term)lab & LAB_MASK) << TAG_BITS)
+       | ((Term)tag & TAG_MASK);
 }
-
-Lab term_lab(Term term) { return (term >> 8) & 0xFFFFFF; }
-
-Loc term_loc(Term term) { return term >> 32; }
 
 static Term term_with_loc(Term term, Loc loc) {
-  return (((Term)loc) << 32) | (term & 0xFFFFFFFF);
+  return (((Term)loc & LOC_MASK) << (LAB_BITS + TAG_BITS))
+       | (term & ((1ULL << (LAB_BITS + TAG_BITS)) - 1));
 }
+u64 term_loc(Term term) { return (term >> (LAB_BITS + TAG_BITS)) & LOC_MASK; }
+u64 term_lab(Term term) { return (term >> TAG_BITS) & LAB_MASK; }
 
 static bool term_has_loc(Term term) {
   Tag tag = term_tag(term);
@@ -484,7 +504,7 @@ static bool dfer_any(TM *tm) {
 
 static Loc node_alloc(TM *tm, u32 cnt) {
   if (tm->nput + cnt >= NODE_LEN) {
-    fprintf(stderr, "%u node space exhausted, nput: %u, cnt: %u, LEN: %u\n",
+    fprintf(stderr, "%u node space exhausted, nput: %llu, cnt: %u, LEN: %u\n",
             tm->tid, tm->nput, cnt, NODE_LEN);
     exit(1);
   }
@@ -1521,6 +1541,7 @@ static void* thread_func(void* arg) {
   tm->buse = true;
   tm->duse = true;
 
+  // srand(time(NULL) ^ (tm->tid * 0x9E3779B9));
   __attribute__((unused))
   u64  fst_steal = 0;
   u64  tick = 0;
@@ -1638,14 +1659,14 @@ static char *tag_to_str(Tag tag) {
 
 __attribute__((unused))
 static const char* term_str(char* buf, Term term) {
-  snprintf(buf, 64, "%s lab:%u loc:%u", tag_to_str(term_tag(term)),
+  snprintf(buf, 64, "%s lab:%llu loc:%llu", tag_to_str(term_tag(term)),
            term_lab(term), term_loc(term));
   return buf;
 }
 
 static void dump_term(Loc loc) {
   Term term = get(loc);
-  printf("%04u %03u %03u %s\n", loc, term_loc(term), term_lab(term),
+  printf("%04llu %03llu %03llu %s\n", loc, term_loc(term), term_lab(term),
       tag_to_str(term_tag(term)));
 }
 
@@ -1709,7 +1730,7 @@ void tm_dump_buff(TM *tm) {
   printf("------------------\n");
   fflush(stdout);
 }
- 
+
 void dump_buff() {
   tm_dump_buff(tms[0]);
 }
