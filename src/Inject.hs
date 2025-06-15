@@ -9,7 +9,7 @@ import qualified Data.Map as Map
 type VarMap = Map.Map String Loc
 
 -- Maps definition string names to their (eventual) index in the book.
-type DefMap = Map.Map String Word32
+type DefMap = Map.Map String Word64
 
 
 -- Core to Runtime
@@ -97,7 +97,7 @@ injectNCore (NMat ret arms) _ defs vars = do
     (vars, arm) <- injectPCore arm (Just (mt1 + i)) defs vars;
     set (mt1 + i) arm;
     return vars
-  }) vars (zip [0..num-1] arms)
+  }) vars (zip [0..fromIntegral num-1] arms)
   return (vars, termNew MAT num mt0)
 
 -- Dex, Net, and Book Injection

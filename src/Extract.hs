@@ -59,7 +59,7 @@ extractNCore loc term = case termTag term of
     let loc = termLoc term
     let extractArm i = get (loc + i) >>= extractPCore
     ret  <- get (loc + 0) >>= extractNCore (loc + 0)
-    arms <- mapM extractArm [1..num]
+    arms <- mapM extractArm [1 .. fromIntegral num]
     return $ NMat ret arms
   x | elem x [OPX, OPY] -> do
     let op  = termOper term
