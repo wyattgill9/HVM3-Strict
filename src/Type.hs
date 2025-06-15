@@ -17,9 +17,9 @@ data PCore
   | PNul
   | PLam NCore PCore
   | PSup PCore PCore
-  | PU32 Word32
-  | PI32 Int32
-  | PF32 Float
+  | PU32 Word64
+  | PI32 Int64
+  | PF32 Double
   deriving (Show, Eq)
 
 data NCore
@@ -60,7 +60,7 @@ data Book = Book
 
 type Tag_ = Word8
 type Lab  = Word32
-type Loc  = Word32
+type Loc  = Word64
 type Term = Word64
 
 data Tag
@@ -162,14 +162,14 @@ foreign import ccall unsafe "Runtime.c handle_failure"
 termOper :: Term -> Oper
 termOper term = (toEnum (fromIntegral (termLab term)))
 
-foreign import ccall unsafe "Runtime.c u32_to_i32"
-  word32ToInt32 :: Word32 -> Int32
+foreign import ccall unsafe "Runtime.c u64_to_i64"
+  word32ToInt32 :: Word64 -> Int64
 
-foreign import ccall unsafe "Runtime.c u32_to_f32"
-  word32ToFloat :: Word32 -> Float
+foreign import ccall unsafe "Runtime.c u64_to_f64"
+  word32ToFloat :: Word64 -> Double
 
-foreign import ccall unsafe "Runtime.c i32_to_u32"
-  int32ToWord32 :: Int32 -> Word32
+foreign import ccall unsafe "Runtime.c i64_to_u64"
+  int32ToWord32 :: Int64 -> Word64
 
-foreign import ccall unsafe "Runtime.c f32_to_u32"
-  floatToWord32 :: Float -> Word32
+foreign import ccall unsafe "Runtime.c f64_to_u64"
+  floatToWord32 :: Double -> Word64

@@ -16,7 +16,7 @@
 #include <string.h>
 #include <unistd.h>
 
-// #define SUMMARY
+#define SUMMARY
 // #define DEBUG
 
 #define DEBUG_LOG(fmt, ...) fprintf(stderr, "[DEBUG] " fmt "\n", ##__VA_ARGS__)
@@ -149,7 +149,7 @@ enum : u64 {
   RBAG_SIZ = RBAG_QED,
 };
 
-enum : u32 {
+enum : u64 {
   // Most of these must be 16-byte aligned (even numbers).
 
   // Final calculated RBAG index
@@ -202,8 +202,7 @@ typedef struct TM {
   Loc spop;  // stolen bbag pop index + 2
   // u32 spop;  // stolen bbag pop index + 2
     //
-  // Loc dput[2]; // next deferred bag push indices
-  u32 dput[2];
+  Loc dput[2]; // next deferred bag push indices
 
   bool buse; // can use booty bag
   bool bhld; // when we KNOW booty bag ctrl word is HELD
@@ -506,7 +505,7 @@ static bool dfer_any(TM *tm) {
 
 static Loc node_alloc(TM *tm, u32 cnt) {
   if (tm->nput + cnt >= NODE_LEN) {
-    fprintf(stderr, "%u node space exhausted, nput: %llu, cnt: %u, LEN: %u\n",
+    fprintf(stderr, "%u node space exhausted, nput: %llu, cnt: %u, LEN: %llu\n",
             tm->tid, tm->nput, cnt, NODE_LEN);
     exit(1);
   }
@@ -641,11 +640,11 @@ void hvm_init() {
   #ifdef SUMMARY
   fprintf(stderr, "HEAP_SIZ = %" PRIu64 "\n", HEAP_SIZ);
   fprintf(stderr, "RBAG_SIZ = %" PRIu64 "\n", RBAG_SIZ);
-  fprintf(stderr, "RBAG     = %u\n", RBAG);
-  fprintf(stderr, "RBAG_LEN = %u\n", RBAG_LEN);
-  fprintf(stderr, "NODE_LEN = %u\n", NODE_LEN);
-  fprintf(stderr, "BBAG_LEN = %u\n", BBAG_LEN);
-  fprintf(stderr, "DFER_INI = %u\n", DFER_INI);
+  fprintf(stderr, "RBAG     = %llu\n", RBAG);
+  fprintf(stderr, "RBAG_LEN = %llu\n", RBAG_LEN);
+  fprintf(stderr, "NODE_LEN = %llu\n", NODE_LEN);
+  fprintf(stderr, "BBAG_LEN = %llu\n", BBAG_LEN);
+  fprintf(stderr, "DFER_INI = %llu\n", DFER_INI);
   fprintf(stderr, "DFER_LEN = %" PRIu64 "\n", DFER_LEN);
   #endif
 }
@@ -953,7 +952,7 @@ u64 f64_to_u64(f64 f) {
   return converter.u;
 }
 
-static void interact_opynum(TM *tm, Loc a_loc, Lab op, u32 y, Tag y_type) {
+static void interact_opynum(TM *tm, Loc a_loc, Lab op, u64 y, Tag y_type) {
   u64 x = term_loc(take(port(1, a_loc)));
   Loc ret = port(2, a_loc);
   u64 res = 0;
