@@ -75,9 +75,9 @@ typedef double f64;
 typedef _Atomic(u64) a64;
 typedef unsigned __int128 u128 __attribute__((aligned(16)));
 
-typedef u64 Term;     // [ Loc:36 | Lab:24 | Tag:4 ]
-typedef u64 Loc; // 36 bits
-typedef u8 Lab; // 24 bits
+typedef u64 Term;     // [ Loc:54 | Lab:8 | Tag:4 ]
+typedef u64 Loc; // 54 bits
+typedef u8 Lab; // 8 bits
 typedef u8 Tag;  // 4 bits
 
 #define TAG_BITS 4
@@ -260,21 +260,34 @@ static Term pair_pos(Pair pair) { return (pair >> 64) & 0xFFFFFFFFFFFFFFFF; }
 
 static Term pair_neg(Pair pair) { return pair & 0xFFFFFFFFFFFFFFFF; }
 
-// Term operations
+// Term operations (LOC TOP BITS)
+// Term term_new(Tag tag, Lab lab, Loc loc) {
+//   return (((Term)loc & LOC_MASK) << (LAB_BITS + TAG_BITS)) |
+//          (((Term)lab & LAB_MASK) << TAG_BITS) |
+//          ((Term)tag & TAG_MASK);
+// }
+// static Term term_with_loc(Term term, Loc loc) {
+//   return (((Term)loc & LOC_MASK) << (LAB_BITS + TAG_BITS)) |
+//          (term & ((1ULL << (LAB_BITS + TAG_BITS)) - 1));
+// }
+//
+// u64 term_loc(Term term) { return (term >> (LAB_BITS + TAG_BITS)) & LOC_MASK; }
+// u64 term_lab(Term term) { return (term >> TAG_BITS) & LAB_MASK; }
+// Tag term_tag(Term term) { return term & TAG_MASK; }
+
 Term term_new(Tag tag, Lab lab, Loc loc) {
-  return (((Term)loc & LOC_MASK) << (LAB_BITS + TAG_BITS)) |
-         (((Term)lab & LAB_MASK) << TAG_BITS) |
-         ((Term)tag & TAG_MASK);
+    return (((Term)tag & TAG_MASK) << (LAB_BITS + LOC_BITS)) |
+           (((Term)lab & LAB_MASK) << LOC_BITS) |
+           ((Term)loc & LOC_MASK);
 }
 
 static Term term_with_loc(Term term, Loc loc) {
-  return (((Term)loc & LOC_MASK) << (LAB_BITS + TAG_BITS)) |
-         (term & ((1ULL << (LAB_BITS + TAG_BITS)) - 1));
+    return (term & ~LOC_MASK) | ((Term)loc & LOC_MASK);
 }
 
-u64 term_loc(Term term) { return (term >> (LAB_BITS + TAG_BITS)) & LOC_MASK; }
-u64 term_lab(Term term) { return (term >> TAG_BITS) & LAB_MASK; }
-Tag term_tag(Term term) { return term & TAG_MASK; }
+u64 term_loc(Term term) { return term & LOC_MASK; }
+u64 term_lab(Term term) { return (term >> LOC_BITS) & LAB_MASK; }
+Tag term_tag(Term term) { return (term >> (LOC_BITS + LAB_BITS)) & TAG_MASK; }
 
 static bool term_has_loc(Term term) {
   Tag tag = term_tag(term);
