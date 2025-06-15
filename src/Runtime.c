@@ -889,7 +889,7 @@ static void interact_opxnul(TM *tm, Loc a_loc) {
   move(tm, ret, term_new(NUL, 0, 0));
 }
 
-static void interact_opxnum(TM *tm, Loc loc, Lab op, u32 num, Tag num_type) {
+static void interact_opxnum(TM *tm, Loc loc, Lab op, u64 num, Tag num_type) {
   Term arg = swap(port(1, loc), term_new(num_type, 0, num));
   link_terms(tm, term_new(OPY, op, loc), arg);
 }
@@ -1194,7 +1194,7 @@ static void interact_dupnul(TM *tm, Loc a_loc) {
   move(tm, dp2, term_new(NUL, 0, a_loc));
 }
 
-static void interact_dupnum(TM *tm, Loc a_loc, u32 n, Tag n_type) {
+static void interact_dupnum(TM *tm, Loc a_loc, u64 n, Tag n_type) {
   Loc dp1 = port(1, a_loc);
   Loc dp2 = port(2, a_loc);
   move(tm, dp1, term_new(n_type, 0, n));
@@ -1213,7 +1213,7 @@ static void interact_matnul(TM *tm, Loc a_loc, Lab mat_len) {
   }
 }
 
-static void interact_matnum(TM *tm, Loc mat_loc, Lab mat_len, u32 n, Tag n_type) {
+static void interact_matnum(TM *tm, Loc mat_loc, Lab mat_len, u64 n, Tag n_type) {
   if (n_type != U32) {
     fprintf(stderr, "match with non-U32\n");
     exit(1);
