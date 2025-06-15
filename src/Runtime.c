@@ -76,13 +76,13 @@ typedef _Atomic(u64) a64;
 typedef unsigned __int128 u128 __attribute__((aligned(16)));
 
 typedef u64 Term;     // [ Loc:36 | Lab:24 | Tag:4 ]
-typedef uint64_t Loc; // 36 bits
-typedef uint32_t Lab; // 24 bits
-typedef uint8_t Tag;  // 4 bits
+typedef u64 Loc; // 36 bits
+typedef u8 Lab; // 24 bits
+typedef u8 Tag;  // 4 bits
 
 #define TAG_BITS 4
-#define LAB_BITS 24
-#define LOC_BITS 36
+#define LAB_BITS 8 
+#define LOC_BITS 52 
 #define TAG_MASK ((1ULL << TAG_BITS) - 1)
 #define LAB_MASK ((1ULL << LAB_BITS) - 1)
 #define LOC_MASK ((1ULL << LOC_BITS) - 1)
@@ -98,7 +98,7 @@ typedef union {
 // Heap config
 enum : u64 {
   HEAP_1GB = (1ULL << 27) * sizeof(u64),
-  HEAP_SIZ = HEAP_1GB * 4,
+  HEAP_SIZ = HEAP_1GB * 16,
   CACH_SIZ = 64,
   CACH_U64 = CACH_SIZ / sizeof(u64),
   TPC = 10, // threads per CPU
@@ -263,7 +263,8 @@ static Term pair_neg(Pair pair) { return pair & 0xFFFFFFFFFFFFFFFF; }
 // Term operations
 Term term_new(Tag tag, Lab lab, Loc loc) {
   return (((Term)loc & LOC_MASK) << (LAB_BITS + TAG_BITS)) |
-         (((Term)lab & LAB_MASK) << TAG_BITS) | ((Term)tag & TAG_MASK);
+         (((Term)lab & LAB_MASK) << TAG_BITS) |
+         ((Term)tag & TAG_MASK);
 }
 
 static Term term_with_loc(Term term, Loc loc) {
