@@ -14,9 +14,9 @@ pcoreToString (PRef nam)     = "@" ++ nam
 pcoreToString PNul           = "*"
 pcoreToString (PLam var bod) = "(" ++ ncoreToString var ++ " " ++ pcoreToString bod ++ ")"
 pcoreToString (PSup t1 t2)   = "{" ++ pcoreToString t1 ++ " " ++ pcoreToString t2 ++ "}"
-pcoreToString (PU32 num)     = show num
-pcoreToString (PI32 num)     = show num
-pcoreToString (PF32 num)     = show num
+pcoreToString (PU36 num)     = show num
+pcoreToString (PI36 num)     = show num
+pcoreToString (PF36 num)     = show num
 
 ncoreToString :: NCore -> String
 ncoreToString (NSub nam)        = nam

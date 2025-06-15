@@ -1,7 +1,7 @@
 leaf = λval λn λl (l val)
 node = λlft λrgt λn λl (n lft rgt)
 
-height = 7
+height = 18
 main = (sum (make height 0))
 
 make = λh switch h { 0: make_leaf _: (make_node h-1) }

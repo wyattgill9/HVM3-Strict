@@ -46,9 +46,9 @@ __asm__(
 #define REF 0x09
 #define OPX 0x0A
 #define OPY 0x0B
-#define U32 0x0C
-#define I32 0x0D
-#define F32 0x0E
+#define U36 0x0C
+#define I36 0x0D
+#define F36 0x0E
 #define MAT 0x0F
 
 // Operators
@@ -95,10 +95,6 @@ typedef uint8_t  Tag; // 4 bits, but stored in 8
 #define LAB_MASK ((1ULL << LAB_BITS) - 1)
 #define LOC_MASK ((1ULL << LOC_BITS) - 1)
 
-// #define TERM_LOC(t) (((t) >> (LAB_BITS + TAG_BITS)) & LOC_MASK)
-// #define TERM_LAB(t) (((t) >> TAG_BITS) & LAB_MASK)
-// #define TERM_TAG(t) ((t) & TAG_MASK)
-
 typedef u128 Pair; // Term | Term
 
 // Using union for type punning (safer in C)
@@ -116,7 +112,7 @@ enum : u64 {
   //////////////////////////
   // Choose a heap size here
   //////////////////////////
-  HEAP_SIZ = HEAP_1GB * 16,
+  HEAP_SIZ = HEAP_1GB * 4,
 
   // Cache line size
   CACH_SIZ = 64,
@@ -255,7 +251,7 @@ static const char* term_str(char* buf, Term term);
 
 // FFI functions
 void dump_buff();
-Tag term_tag(Term term) { return term & TAG_MASK; }
+Tag term_tag(Term term); 
 Loc term_loc(Term term);
 
 static u64 align(u64 align, u64 val) {
@@ -347,10 +343,11 @@ static Term term_with_loc(Term term, Loc loc) {
 }
 u64 term_loc(Term term) { return (term >> (LAB_BITS + TAG_BITS)) & LOC_MASK; }
 u64 term_lab(Term term) { return (term >> TAG_BITS) & LAB_MASK; }
+Tag term_tag(Term term) { return term & TAG_MASK; }
 
 static bool term_has_loc(Term term) {
   Tag tag = term_tag(term);
-  return !(tag == SUB || tag == NUL || tag == ERA || tag == REF || tag == U32);
+  return !(tag == SUB || tag == NUL || tag == ERA || tag == REF || tag == U36);
 }
 
 static Term term_offset_loc(Term term, Loc offset) {
@@ -878,8 +875,8 @@ static void interact_appnul(TM *tm, Loc a_loc) {
 static void interact_appu32(TM *tm, Loc a_loc, u64 num) {
   Term arg = take(port(1, a_loc));
   Loc ret = port(2, a_loc);
-  link_terms(tm, term_new(U32, 0, num), arg);
-  move(tm, ret, term_new(U32, 0, num));
+  link_terms(tm, term_new(U36, 0, num), arg);
+  move(tm, ret, term_new(U36, 0, num));
 }
 
 static void interact_opxnul(TM *tm, Loc a_loc) {
@@ -958,7 +955,7 @@ static void interact_opynum(TM *tm, Loc a_loc, Lab op, u64 y, Tag y_type) {
   u64 res = 0;
 
   // Optimized path using jump table & direct compute
-  if (y_type == U32) {
+  if (y_type == U36) {
     // Faster operation dispatch
     static void *op_jumptable[] = {
         [OP_ADD] = &&do_add, [OP_SUB] = &&do_sub, [OP_MUL] = &&do_mul,
@@ -1022,9 +1019,9 @@ static void interact_opynum(TM *tm, Loc a_loc, Lab op, u64 y, Tag y_type) {
 
   done:;
   } else {
-    // Inlined type conversion and operation for i32 and f32
+    // Inlined type conversion and operation for i36 and f36
     switch (y_type) {
-    case I32: {
+    case I36: {
       i32 a =(x);
       i32 b = u64_to_i64(y);
       i32 val;
@@ -1083,10 +1080,10 @@ static void interact_opynum(TM *tm, Loc a_loc, Lab op, u64 y, Tag y_type) {
       res = i64_to_u64(val);
       break;
     }
-    case F32: {
-      f32 a = u64_to_f64(x);
-      u32 b = u64_to_f64(y);
-      f32 val;
+    case F36: {
+      f64 a = u64_to_f64(x);
+      u64 b = u64_to_f64(y);
+      f64 val;
       switch (op) {
       case OP_ADD:
         val = a + b;
@@ -1214,8 +1211,8 @@ static void interact_matnul(TM *tm, Loc a_loc, Lab mat_len) {
 }
 
 static void interact_matnum(TM *tm, Loc mat_loc, Lab mat_len, u64 n, Tag n_type) {
-  if (n_type != U32) {
-    fprintf(stderr, "match with non-U32\n");
+  if (n_type != U36) {
+    fprintf(stderr, "match with non-U36\n");
     exit(1);
   }
 
@@ -1232,7 +1229,7 @@ static void interact_matnum(TM *tm, Loc mat_loc, Lab mat_len, u64 n, Tag n_type)
     move(tm, ret, arm);
   } else {
     Loc app = node_alloc(tm, 2);
-    set(app + 0, term_new(U32, 0, n - (mat_len - 1)));
+    set(app + 0, term_new(U36, 0, n - (mat_len - 1)));
     set(app + 1, term_new(SUB, 0, 0));
     move(tm, ret, term_new(VAR, 0, port(2, app)));
 
@@ -1295,7 +1292,7 @@ static bool interact(TM *tm, Term neg, Term pos) {
     case NUL:
       interact_appnul(tm, neg_loc);
       break;
-    case U32:
+    case U36:
       interact_appu32(tm, neg_loc, pos_loc);
       break;
     case REF:
@@ -1313,9 +1310,9 @@ static bool interact(TM *tm, Term neg, Term pos) {
     case NUL:
       interact_opxnul(tm, neg_loc);
       break;
-    case U32:
-    case I32:
-    case F32:
+    case U36:
+    case I36:
+    case F36:
       interact_opxnum(tm, neg_loc, term_lab(neg), pos_loc, pos_tag);
       break;
     case REF:
@@ -1334,9 +1331,9 @@ static bool interact(TM *tm, Term neg, Term pos) {
     case NUL:
       interact_opynul(tm, neg_loc);
       break;
-    case U32:
-    case I32:
-    case F32:
+    case U36:
+    case I36:
+    case F36:
       interact_opynum(tm, neg_loc, term_lab(neg), pos_loc, pos_tag);
       break;
     case REF:
@@ -1358,9 +1355,9 @@ static bool interact(TM *tm, Term neg, Term pos) {
     case NUL:
       interact_dupnul(tm, neg_loc);
       break;
-    case U32:
-    case I32:
-    case F32:
+    case U36:
+    case I36:
+    case F36:
       interact_dupnum(tm, neg_loc, pos_loc, pos_tag);
       break;
     case REF:
@@ -1378,9 +1375,9 @@ static bool interact(TM *tm, Term neg, Term pos) {
     case NUL:
       interact_matnul(tm, neg_loc, term_lab(neg));
       break;
-    case U32:
-    case I32:
-    case F32:
+    case U36:
+    case I36:
+    case F36:
       interact_matnum(tm, neg_loc, term_lab(neg), pos_loc, pos_tag);
       break;
     case REF:
@@ -1403,7 +1400,7 @@ static bool interact(TM *tm, Term neg, Term pos) {
       interact_erasup(tm, pos_loc);
       break;
     case NUL:
-    case U32:
+    case U36:
     case REF:
     default:
       break;
@@ -1644,12 +1641,12 @@ static char *tag_to_str(Tag tag) {
     return "OPX";
   case OPY:
     return "OPY";
-  case U32:
-    return "U32";
-  case I32:
-    return "I32";
-  case F32:
-    return "F32";
+  case U36:
+    return "U36";
+  case I36:
+    return "I36";
+  case F36:
+    return "F36";
   case MAT:
     return "MAT";
 

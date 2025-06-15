@@ -17,9 +17,9 @@ data PCore
   | PNul
   | PLam NCore PCore
   | PSup PCore PCore
-  | PU32 Word64
-  | PI32 Int64
-  | PF32 Double
+  | PU36 Word64
+  | PI36 Int64
+  | PF36 Double
   deriving (Show, Eq)
 
 data NCore
@@ -63,6 +63,7 @@ type Lab  = Word32
 type Loc  = Word64
 type Term = Word64
 
+-- Ints, UInts, and Floats are now 36-bit
 data Tag
   = VOID
   | VAR
@@ -76,9 +77,9 @@ data Tag
   | REF
   | OPX
   | OPY
-  | U32
-  | I32
-  | F32
+  | U36
+  | I36
+  | F36
   | MAT
   deriving (Enum, Eq, Show)
 
@@ -163,13 +164,13 @@ termOper :: Term -> Oper
 termOper term = (toEnum (fromIntegral (termLab term)))
 
 foreign import ccall unsafe "Runtime.c u64_to_i64"
-  word32ToInt32 :: Word64 -> Int64
+  word64ToInt64 :: Word64 -> Int64
 
 foreign import ccall unsafe "Runtime.c u64_to_f64"
-  word32ToFloat :: Word64 -> Double
+  word64ToDouble :: Word64 -> Double
 
 foreign import ccall unsafe "Runtime.c i64_to_u64"
-  int32ToWord32 :: Int64 -> Word64
+  int64ToWord64 :: Int64 -> Word64
 
 foreign import ccall unsafe "Runtime.c f64_to_u64"
-  floatToWord32 :: Double -> Word64
+  doubleToWord64 :: Double -> Word64
