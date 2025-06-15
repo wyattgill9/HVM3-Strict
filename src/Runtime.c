@@ -875,7 +875,7 @@ static void interact_appnul(TM *tm, Loc a_loc) {
   move(tm, ret, term_new(NUL, 0, 0));
 }
 
-static void interact_appu32(TM *tm, Loc a_loc, u32 num) {
+static void interact_appu32(TM *tm, Loc a_loc, u64 num) {
   Term arg = take(port(1, a_loc));
   Loc ret = port(2, a_loc);
   link_terms(tm, term_new(U32, 0, num), arg);
