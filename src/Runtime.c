@@ -75,7 +75,7 @@ typedef double f64;
 typedef _Atomic(u64) a64;
 typedef unsigned __int128 u128 __attribute__((aligned(16)));
 
-typedef u64 Term;     // [Loc:36|Lab:24|Tag:4]
+typedef u64 Term;     // [ Loc:36 | Lab:24 | Tag:4 ]
 typedef uint64_t Loc; // 36 bits
 typedef uint32_t Lab; // 24 bits
 typedef uint8_t Tag;  // 4 bits
@@ -841,6 +841,7 @@ static void interact_opynum(TM *tm, Loc a_loc, Lab op, u64 y, Tag y_type) {
         [OP_OR] = &&do_or,   [OP_XOR] = &&do_xor, [OP_LSH] = &&do_lsh,
         [OP_RSH] = &&do_rsh};
 
+    // Faster branching
     goto *op_jumptable[op];
 
   do_add:
