@@ -116,7 +116,7 @@ enum : u64 {
   //////////////////////////
   // Choose a heap size here
   //////////////////////////
-  HEAP_SIZ = HEAP_1GB * 4,
+  HEAP_SIZ = HEAP_1GB * 16,
 
   // Cache line size
   CACH_SIZ = 64,
