@@ -79,7 +79,7 @@ typedef union {
 // Heap config
 enum : u64 {
   HEAP_1GB = (1ULL << 27) * sizeof(u64),
-  HEAP_SIZ = HEAP_1GB * 25,
+  HEAP_SIZ = HEAP_1GB * 16,
   CACH_SIZ = 64,
   CACH_U64 = CACH_SIZ / sizeof(u64),
   TPC = 24, // threads per CPU
