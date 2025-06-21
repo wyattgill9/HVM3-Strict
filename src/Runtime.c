@@ -4,15 +4,9 @@
 #include <execinfo.h>
 #include <inttypes.h>
 #include <pthread.h>
-#include <stdalign.h>
 #include <stdatomic.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
+#include "macros.h"
 
 #define SUMMARY
 // #define DEBUG
@@ -62,23 +56,12 @@ __asm__(".global dmb_ishst\n"
 #define OP_LSH 0x0E
 #define OP_RSH 0x0F
 
-// Types
-typedef uint8_t u8;
-typedef int16_t u16;
-typedef int32_t i32;
-typedef uint32_t u32;
-typedef _Atomic(u32) a32;
-typedef float f32;
-typedef int64_t i64;
-typedef uint64_t u64;
-typedef double f64;
-typedef _Atomic(u64) a64;
-typedef unsigned __int128 u128 __attribute__((aligned(16)));
-
 typedef u64 Term;     // [ Loc:54 | Lab:8 | Tag:4 ]
 typedef u64 Loc; // 54 bits
 typedef u8 Lab; // 8 bits
 typedef u8 Tag;  // 4 bits
+
+typedef u128 Pair;
 
 #define TAG_BITS 4
 #define LAB_BITS 8 
@@ -86,8 +69,6 @@ typedef u8 Tag;  // 4 bits
 #define TAG_MASK ((1ULL << TAG_BITS) - 1)
 #define LAB_MASK ((1ULL << LAB_BITS) - 1)
 #define LOC_MASK ((1ULL << LOC_BITS) - 1)
-
-typedef u128 Pair;
 
 typedef union {
   u64 u;
@@ -98,10 +79,10 @@ typedef union {
 // Heap config
 enum : u64 {
   HEAP_1GB = (1ULL << 27) * sizeof(u64),
-  HEAP_SIZ = HEAP_1GB * 16,
+  HEAP_SIZ = HEAP_1GB * 25,
   CACH_SIZ = 64,
   CACH_U64 = CACH_SIZ / sizeof(u64),
-  TPC = 10, // threads per CPU
+  TPC = 24, // threads per CPU
 
 #ifdef __APPLE__
   PCOR_TOT = 4,
@@ -207,11 +188,7 @@ void tm_reset(TM *tm) {
 
 TM *tm_new(u64 tid) {
   TM *tm = aligned_alloc(CACH_SIZ, align(CACH_SIZ, sizeof(TM)));
-  if (tm == NULL) {
-    fprintf(stderr, "tm_new() allocation failed\n");
-    exit(1);
-  }
-  tm_reset(tm);
+  expect(tm != NULL, "tm_new() allocation failed");  tm_reset(tm);
   tm->tid = tid;
 
   // Booty bag
@@ -411,9 +388,9 @@ static bool dfer_any(TM *tm) { return (tm->dput[0] > 0) || (tm->dput[1] > 0); }
 // Allocator
 static Loc node_alloc(TM *tm, u32 cnt) {
   if (tm->nput + cnt >= NODE_LEN) {
-    fprintf(stderr, "%u node space exhausted, nput: %llu, cnt: %u, LEN: %llu\n",
-            tm->tid, tm->nput, cnt, NODE_LEN);
-    exit(1);
+    char msg[128];
+    snprintf(msg, sizeof(msg), "%u node space exhausted, nput: %lu, cnt: %u, LEN: %lu", tm->tid, tm->nput, cnt, NODE_LEN);
+    panic(msg);
   }
   Loc loc = rnod_ini(tm->tid) + tm->nput;
   tm->nput += cnt;
@@ -455,9 +432,9 @@ static void redex_push(TM *tm, Term neg, Term pos, bool dfer) {
 
 #ifdef DEBUG
   if (off > BBAG_LEN && tm->rput >= RPUT_MAX - 1) {
-    fprintf(stderr, "%u rbag space exhausted\n", tm->tid);
-    exit(1);
+    panic("rbag space exhausted");
   }
+  // panic("rbag space exhausted");
 #endif
 }
 
@@ -519,11 +496,10 @@ static Loc redex_pop_loc(TM *tm) {
 
 // FFI functions
 void hvm_init() {
-  if (BUFF == NULL) {
+  if(!BUFF) {
     BUFF = aligned_alloc(CACH_SIZ, HEAP_SIZ);
     if (BUFF == NULL) {
-      fprintf(stderr, "Heap allocation failed\n");
-      exit(1);
+      panic("Heap allocation failed"); 
     }
   }
   memset(BUFF, 0, HEAP_SIZ);
@@ -532,11 +508,11 @@ void hvm_init() {
 #ifdef SUMMARY
   fprintf(stderr, "HEAP_SIZ = %" PRIu64 "\n", HEAP_SIZ);
   fprintf(stderr, "RBAG_SIZ = %" PRIu64 "\n", RBAG_SIZ);
-  fprintf(stderr, "RBAG     = %llu\n", RBAG);
-  fprintf(stderr, "RBAG_LEN = %llu\n", RBAG_LEN);
-  fprintf(stderr, "NODE_LEN = %llu\n", NODE_LEN);
-  fprintf(stderr, "BBAG_LEN = %llu\n", BBAG_LEN);
-  fprintf(stderr, "DFER_INI = %llu\n", DFER_INI);
+  fprintf(stderr, "RBAG     = %lu\n", RBAG);
+  fprintf(stderr, "RBAG_LEN = %lu\n", RBAG_LEN);
+  fprintf(stderr, "NODE_LEN = %lu\n", NODE_LEN);
+  fprintf(stderr, "BBAG_LEN = %lu\n", BBAG_LEN);
+  fprintf(stderr, "DFER_INI = %lu\n", DFER_INI);
   fprintf(stderr, "DFER_LEN = %" PRIu64 "\n", DFER_LEN);
 #endif
 }
@@ -615,8 +591,7 @@ void def_new(char *name) {
   };
 
   if ((def.nodes == NULL) || (def.rbag == NULL)) {
-    fprintf(stderr, "def_new() memory allocation failed\n");
-    exit(1);
+    panic("def_new() memory allocation failed");
   }
 
   Term *rnod = BUFF;
@@ -679,8 +654,7 @@ static Term expand_ref(TM *tm, Loc def_idx) {
 static void boot(Loc def_idx) {
   TM *tm = tms[0];
   if (tm->nput > 0 || tm->rput > 0) {
-    fprintf(stderr, "booting on non-empty state\n");
-    exit(1);
+    panic("booting on non-empty state");
   }
   node_alloc(tm, 1);
   set(0, expand_ref(tm, def_idx));
@@ -714,12 +688,10 @@ static void interact_appref(TM *tm, Term neg, Loc pos_loc) {
 #ifdef DEBUG
   if (term_tag(lam) != LAM) {
     // Assumption broken. May not matter, but I want to know.
-    fprintf(stderr, "APPREF root node is not a LAM, %s\n",
-            tag_to_str(term_tag(lam)));
-    exit(1);
-  }
+    char msg[128];
+    snprintf(msg, sizeof(msg), "APPREF root node is not a LAM, %s", tag_to_str(term_tag(lam)));
+    panic(msg);  }
 #endif
-  // Force push to deferred bag
   redex_push(tm, neg, lam, true);
 }
 
@@ -1103,8 +1075,7 @@ static void interact_matnul(TM *tm, Loc a_loc, Lab mat_len) {
 static void interact_matnum(TM *tm, Loc mat_loc, Lab mat_len, u64 n,
                             Tag n_type) {
   if (n_type != U36) {
-    fprintf(stderr, "match with non-U36\n");
-    exit(1);
+    panic("match with non-U36");
   }
 
   u32 i_arm = (n < mat_len - 1) ? n : (mat_len - 1);
@@ -1481,8 +1452,7 @@ static void parallel_normalize() {
 
 Term normalize(Term term) {
   if (term_tag(term) != REF) {
-    fprintf(stderr, "normalizing non-ref\n");
-    exit(1);
+    panic("normalizing non-ref");  
   }
 
   boot(term_loc(term));
@@ -1539,14 +1509,14 @@ static char *tag_to_str(Tag tag) {
 }
 
 __attribute__((unused)) static const char *term_str(char *buf, Term term) {
-  snprintf(buf, 64, "%s lab:%llu loc:%llu", tag_to_str(term_tag(term)),
+  snprintf(buf, 64, "%s lab:%lu loc:%lu", tag_to_str(term_tag(term)),
            term_lab(term), term_loc(term));
   return buf;
 }
 
 static void dump_term(Loc loc) {
   Term term = get(loc);
-  printf("%04llu %03llu %03llu %s\n", loc, term_loc(term), term_lab(term),
+  printf("%04lu %03lu %03lu %s\n", loc, term_loc(term), term_lab(term),
          tag_to_str(term_tag(term)));
 }
 
