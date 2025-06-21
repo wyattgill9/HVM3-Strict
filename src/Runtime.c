@@ -816,175 +816,75 @@ u64 f64_to_u64(f64 f) {
 static void interact_opynum(TM *tm, Loc a_loc, Lab op, u64 y, Tag y_type) {
   u64 x = term_loc(take(port(1, a_loc)));
   Loc ret = port(2, a_loc);
-  u64 res = 0;
+  u64 res;
 
-  if (y_type == U36) {
-    static void *op_jumptable[] = {
-        [OP_ADD] = &&do_add, [OP_SUB] = &&do_sub, [OP_MUL] = &&do_mul,
-        [OP_DIV] = &&do_div, [OP_EQ] = &&do_eq,   [OP_NE] = &&do_ne,
-        [OP_LT] = &&do_lt,   [OP_GT] = &&do_gt,   [OP_LTE] = &&do_lte,
-        [OP_GTE] = &&do_gte, [OP_MOD] = &&do_mod, [OP_AND] = &&do_and,
-        [OP_OR] = &&do_or,   [OP_XOR] = &&do_xor, [OP_LSH] = &&do_lsh,
-        [OP_RSH] = &&do_rsh};
+  static const void * const dispatch[] = {
+    [0xC0] = &&u_add, [0xC1] = &&u_sub, [0xC2] = &&u_mul, [0xC3] = &&u_div,
+    [0xC4] = &&u_mod, [0xC5] = &&u_eq,  [0xC6] = &&u_ne,  [0xC7] = &&u_lt,
+    [0xC8] = &&u_gt,  [0xC9] = &&u_lte, [0xCA] = &&u_gte, [0xCB] = &&u_and,
+    [0xCC] = &&u_or,  [0xCD] = &&u_xor, [0xCE] = &&u_lsh, [0xCF] = &&u_rsh,
 
-    // Faster branching
-    goto *op_jumptable[op];
+    [0xD0] = &&i_add, [0xD1] = &&i_sub, [0xD2] = &&i_mul, [0xD3] = &&i_div,
+    [0xD4] = &&i_mod, [0xD5] = &&i_eq,  [0xD6] = &&i_ne,  [0xD7] = &&i_lt,
+    [0xD8] = &&i_gt,  [0xD9] = &&i_lte, [0xDA] = &&i_gte, [0xDB] = &&i_and,
+    [0xDC] = &&i_or,  [0xDD] = &&i_xor, [0xDE] = &&i_lsh, [0xDF] = &&i_rsh,
 
-  do_add:
-    res = x + y;
-    goto done;
-  do_sub:
-    res = x - y;
-    goto done;
-  do_mul:
-    res = x * y;
-    goto done;
-  do_div:
-    res = x / y;
-    goto done;
-  do_eq:
-    res = x == y;
-    goto done;
-  do_ne:
-    res = x != y;
-    goto done;
-  do_lt:
-    res = x < y;
-    goto done;
-  do_gt:
-    res = x > y;
-    goto done;
-  do_lte:
-    res = x <= y;
-    goto done;
-  do_gte:
-    res = x >= y;
-    goto done;
-  do_mod:
-    res = x % y;
-    goto done;
-  do_and:
-    res = x & y;
-    goto done;
-  do_or:
-    res = x | y;
-    goto done;
-  do_xor:
-    res = x ^ y;
-    goto done;
-  do_lsh:
-    res = x << y;
-    goto done;
-  do_rsh:
-    res = x >> y;
-    goto done;
+    [0xE0] = &&f_add, [0xE1] = &&f_sub, [0xE2] = &&f_mul, [0xE3] = &&f_div,
+    [0xE4] = &&inv,   [0xE5] = &&f_eq,  [0xE6] = &&f_ne,  [0xE7] = &&f_lt,
+    [0xE8] = &&f_gt,  [0xE9] = &&f_lte, [0xEA] = &&f_gte, [0xEB] = &&inv,
+    [0xEC] = &&inv,   [0xED] = &&inv,   [0xEE] = &&inv,   [0xEF] = &&inv
+  };
 
-  done:;
-  } else {
-    // Inlined type conversion and operation for i36 and f36
-    switch (y_type) {
-    case I36: {
-      i32 a = (x);
-      i32 b = u64_to_i64(y);
-      i32 val;
-      switch (op) {
-      case OP_ADD:
-        val = a + b;
-        break;
-      case OP_SUB:
-        val = a - b;
-        break;
-      case OP_MUL:
-        val = a * b;
-        break;
-      case OP_DIV:
-        val = a / b;
-        break;
-      case OP_EQ:
-        val = a == b;
-        break;
-      case OP_NE:
-        val = a != b;
-        break;
-      case OP_LT:
-        val = a < b;
-        break;
-      case OP_GT:
-        val = a > b;
-        break;
-      case OP_LTE:
-        val = a <= b;
-        break;
-      case OP_GTE:
-        val = a >= b;
-        break;
-      case OP_MOD:
-        val = a % b;
-        break;
-      case OP_AND:
-        val = a & b;
-        break;
-      case OP_OR:
-        val = a | b;
-        break;
-      case OP_XOR:
-        val = a ^ b;
-        break;
-      case OP_LSH:
-        val = a << b;
-        break;
-      case OP_RSH:
-        val = a >> b;
-        break;
-      default:
-        val = 0;
-      }
-      res = i64_to_u64(val);
-      break;
-    }
-    case F36: {
-      f64 a = u64_to_f64(x);
-      u64 b = u64_to_f64(y);
-      f64 val;
-      switch (op) {
-      case OP_ADD:
-        val = a + b;
-        break;
-      case OP_SUB:
-        val = a - b;
-        break;
-      case OP_MUL:
-        val = a * b;
-        break;
-      case OP_DIV:
-        val = a / b;
-        break;
-      case OP_EQ:
-        val = a == b;
-        break;
-      case OP_NE:
-        val = a != b;
-        break;
-      case OP_LT:
-        val = a < b;
-        break;
-      case OP_GT:
-        val = a > b;
-        break;
-      case OP_LTE:
-        val = a <= b;
-        break;
-      case OP_GTE:
-        val = a >= b;
-        break;
-      default:
-        val = 0;
-      }
-      res = f64_to_u64(val);
-      break;
-    }
-    }
-  }
+  goto *dispatch[(y_type << 4) | op];
+
+  u_add: res = x + y; goto done;
+  u_sub: res = x - y; goto done;
+  u_mul: res = x * y; goto done;
+  u_div: res = x / y; goto done;
+  u_mod: res = x % y; goto done;
+  u_eq:  res = x == y; goto done;
+  u_ne:  res = x != y; goto done;
+  u_lt:  res = x < y; goto done;
+  u_gt:  res = x > y; goto done;
+  u_lte: res = x <= y; goto done;
+  u_gte: res = x >= y; goto done;
+  u_and: res = x & y; goto done;
+  u_or:  res = x | y; goto done;
+  u_xor: res = x ^ y; goto done;
+  u_lsh: res = x << y; goto done;
+  u_rsh: res = x >> y; goto done;
+
+  i_add: { i64 a = (i64)x, b = (i64)y; res = (u64)(a + b); goto done; }
+  i_sub: { i64 a = (i64)x, b = (i64)y; res = (u64)(a - b); goto done; }
+  i_mul: { i64 a = (i64)x, b = (i64)y; res = (u64)(a * b); goto done; }
+  i_div: { i64 a = (i64)x, b = (i64)y; res = (u64)(a / b); goto done; }
+  i_mod: { i64 a = (i64)x, b = (i64)y; res = (u64)(a % b); goto done; }
+  i_eq:  { i64 a = (i64)x, b = (i64)y; res = (u64)(a == b); goto done; }
+  i_ne:  { i64 a = (i64)x, b = (i64)y; res = (u64)(a != b); goto done; }
+  i_lt:  { i64 a = (i64)x, b = (i64)y; res = (u64)(a < b); goto done; }
+  i_gt:  { i64 a = (i64)x, b = (i64)y; res = (u64)(a > b); goto done; }
+  i_lte: { i64 a = (i64)x, b = (i64)y; res = (u64)(a <= b); goto done; }
+  i_gte: { i64 a = (i64)x, b = (i64)y; res = (u64)(a >= b); goto done; }
+  i_and: { i64 a = (i64)x, b = (i64)y; res = (u64)(a & b); goto done; }
+  i_or:  { i64 a = (i64)x, b = (i64)y; res = (u64)(a | b); goto done; }
+  i_xor: { i64 a = (i64)x, b = (i64)y; res = (u64)(a ^ b); goto done; }
+  i_lsh: { i64 a = (i64)x, b = (i64)y; res = (u64)(a << b); goto done; }
+  i_rsh: { i64 a = (i64)x, b = (i64)y; res = (u64)(a >> b); goto done; }
+
+  f_add: { f64 a = u64_to_f64(x), b = u64_to_f64(y); res = f64_to_u64(a + b); goto done; }
+  f_sub: { f64 a = u64_to_f64(x), b = u64_to_f64(y); res = f64_to_u64(a - b); goto done; }
+  f_mul: { f64 a = u64_to_f64(x), b = u64_to_f64(y); res = f64_to_u64(a * b); goto done; }
+  f_div: { f64 a = u64_to_f64(x), b = u64_to_f64(y); res = f64_to_u64(a / b); goto done; }
+  f_eq:  { f64 a = u64_to_f64(x), b = u64_to_f64(y); res = f64_to_u64(a == b); goto done; }
+  f_ne:  { f64 a = u64_to_f64(x), b = u64_to_f64(y); res = f64_to_u64(a != b); goto done; }
+  f_lt:  { f64 a = u64_to_f64(x), b = u64_to_f64(y); res = f64_to_u64(a < b); goto done; }
+  f_gt:  { f64 a = u64_to_f64(x), b = u64_to_f64(y); res = f64_to_u64(a > b); goto done; }
+  f_lte: { f64 a = u64_to_f64(x), b = u64_to_f64(y); res = f64_to_u64(a <= b); goto done; }
+  f_gte: { f64 a = u64_to_f64(x), b = u64_to_f64(y); res = f64_to_u64(a >= b); goto done; }
+
+  inv: res = 0;
+
+done:
   move(tm, ret, term_new(y_type, 0, res));
 }
 

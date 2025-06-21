@@ -28,7 +28,7 @@ executable hvms
     hs-source-dirs:       src
     default-language:     GHC2024
     c-sources:            src/Runtime.c
-    cc-options:           -O3 -Wall -std=c11 
+    cc-options:           -O3 -ffast-math -march=native -flto -Wall -std=c23 
     extra-libraries:      c
     if os(linux)
         extra-libraries:  atomic
