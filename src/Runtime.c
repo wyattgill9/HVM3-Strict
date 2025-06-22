@@ -886,7 +886,7 @@ static void interact_opxnul(TM *tm, Loc a_loc) {
   move(tm, ret, term_new(NUL, 0, 0));
 }
 
-static void interact_opxnum(TM *tm, Loc loc, Lab op, u32 num, Tag num_type) {
+static void interact_opxnum(TM *tm, Loc loc, Lab op, u64 num, Tag num_type) {
   Term arg = swap(port(1, loc), term_new(num_type, 0, num));
   link_terms(tm, term_new(OPY, op, loc), arg);
 }
@@ -923,7 +923,7 @@ static void interact_opynul(TM *tm, Loc a_loc) {
 }
 
 // Safer Utilities
-u64 u64_to_u64(u32 u) { return u; }
+u64 u64_to_u64(u64 u) { return u; }
 
 i64 u64_to_i64(u64 u) {
   TypeConverter converter;
