@@ -1,4 +1,5 @@
 // HVM3-Strict Core: parallel, polarized, LAM/APP & DUP/SUP only
+#define _GNU_SOURCE
 
 #include <assert.h>
 #include <execinfo.h>
@@ -16,8 +17,11 @@
 #include <string.h>
 #include <unistd.h>
 
-#define SUMMARY
+// #define SUMMARY
 //#define DEBUG
+
+#define likely(x)   __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
 
 #ifdef __APPLE__
 // Store barrier
@@ -115,14 +119,14 @@ enum : u64 {
   //////////////////////////
   // Choose a heap size here
   //////////////////////////
-  HEAP_SIZ = HEAP_1GB * 4,
+  HEAP_SIZ = HEAP_1GB * 8,
 
   // Cache line size
   CACH_SIZ = 64,
   CACH_U64 = CACH_SIZ / sizeof(u64),
 
   // --- Number of threads ---
-  TPC = 10,
+  TPC = 12,
 
   #ifdef __APPLE__
   // PCores and ECores total, and in-use
@@ -1426,13 +1430,22 @@ static void bind_core(int tid) {
 }
 #endif // __APPLE__
 
+// --- Core binding (LINUX) ---
+#ifdef __linux__
+void bind_core(int cpu) {
+  cpu_set_t cpuset;
+  CPU_ZERO(&cpuset);
+  CPU_SET(cpu, &cpuset);
+  pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+}
+#endif // __linux__ 
+
 // --- Core thread function ---
 static void* thread_func(void* arg) {
   int thread_id = (u64)arg;
 
-#ifdef __APPLE__
   bind_core(thread_id);
-#endif
+  
   TM *tm = tms[thread_id];
 
   // Wait until after injection to turn these on
