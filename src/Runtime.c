@@ -16,10 +16,8 @@
 #include <string.h>
 #include <unistd.h>
 
-//#define SUMMARY
+#define SUMMARY
 //#define DEBUG
-
-#define DEBUG_LOG(fmt, ...) fprintf(stderr, "[DEBUG] " fmt "\n", ##__VA_ARGS__)
 
 #ifdef __APPLE__
 // Store barrier
@@ -34,7 +32,7 @@ __asm__(
 );
 #endif // __APPLE__
 
-// Constants
+// --- Constants ---
 #define VAR 0x01
 #define SUB 0x02
 #define NUL 0x03
@@ -51,7 +49,7 @@ __asm__(
 #define F32 0x0E
 #define MAT 0x0F
 
-// Operators
+// --- Operators ---
 #define OP_ADD 0x00
 #define OP_SUB 0x01
 #define OP_MUL 0x02
@@ -69,33 +67,49 @@ __asm__(
 #define OP_LSH 0x0E
 #define OP_RSH 0x0F
 
-// Types
-typedef uint8_t      u8;
-typedef int32_t      i32;
-typedef uint32_t     u32;
+// --- Rusty Types --- 
+typedef uint8_t u8;
+typedef uint32_t u32;
+typedef uint64_t u64;
+
 typedef _Atomic(u32) a32;
-typedef float        f32;
-typedef int64_t      i64;
-typedef uint64_t     u64;
 typedef _Atomic(u64) a64;
+
 typedef unsigned __int128 u128 __attribute__((aligned(16)));
 
-typedef u8   Tag;  //  8 bits
-typedef u32  Lab;  // 24 bits
-typedef u32  Loc;  // 32 bits
-typedef u64  Term; // Loc | Lab | Tag
-typedef u128 Pair; // Term | Term
+typedef int32_t i32;
+typedef int64_t i64;
 
-// Using union for type punning (safer in C)
+typedef float f32;
+typedef double f64;
+
+typedef size_t usize;
+typedef ptrdiff_t isize;
+
+// --- CORE TYPES ---
+typedef u64 Term; // [ Loc:54 | Lab:8 | Tag:4 ]
+typedef u64 Loc;
+typedef u8 Lab;
+typedef u8 Tag;
+
+typedef u128 Pair;
+
+#define TAG_BITS 4
+#define LAB_BITS 8 
+#define LOC_BITS 52 
+#define TAG_MASK ((1ULL << TAG_BITS) - 1)
+#define LAB_MASK ((1ULL << LAB_BITS) - 1)
+#define LOC_MASK ((1ULL << LOC_BITS) - 1)
+
+// -- Type Conversion --
 typedef union {
-  u32 u;
-  i32 i;
-  f32 f;
+  u64 u;
+  i64 i;
+  f64 f;
 } TypeConverter;
 
-// Heap configuration options
+// --- Heap Config --- 
 enum : u64 {
-  // 1GiB heap
   HEAP_1GB = (1ULL << 27) * sizeof(u64),  // 128Mi * 8 bytes = 1GiB
 
   //////////////////////////
@@ -107,7 +121,7 @@ enum : u64 {
   CACH_SIZ = 64,
   CACH_U64 = CACH_SIZ / sizeof(u64),
 
-  // Threads per CPU
+  // --- Number of threads ---
   TPC = 10,
 
   #ifdef __APPLE__
@@ -203,7 +217,7 @@ typedef struct TM {
   u64 itrs;  // interaction count
 } TM;
 
-static_assert(sizeof(TM) <= CACH_SIZ, "TM struct getting big");
+// static_assert(sizeof(TM) <= CACH_SIZ, "TM struct getting big");
 
 // Booty bag control word values
 enum : u64 {
@@ -236,7 +250,7 @@ static const char* term_str(char* buf, Term term);
 
 // FFI functions
 void dump_buff();
-Tag term_tag(Term term) { return term & 0xFF; }
+Tag term_tag(Term term);
 Loc term_loc(Term term);
 
 static u64 align(u64 align, u64 val) {
@@ -301,7 +315,7 @@ static void free_static_data() {
   }
 }
 
-// Pair operations
+// --- Pair operations ---
 static Pair pair_new(Term neg, Term pos) {
   return ((Pair)pos << 64) | neg;
 }
@@ -314,18 +328,28 @@ static Term pair_neg(Pair pair) {
   return pair & 0xFFFFFFFFFFFFFFFF;
 }
 
-// Term operations
-Term term_new(Tag tag, Lab lab, Loc loc) {
-  return ((Term)loc << 32) | ((Term)lab << 8) | tag;
+static Pair take_pair(Loc loc) {
+  return *(Pair*)&BUFF[loc];
 }
 
-Lab term_lab(Term term) { return (term >> 8) & 0xFFFFFF; }
+static void set_pair(Loc loc, Pair pair) {
+  *((Pair*)&BUFF[loc]) = pair;
+}
 
-Loc term_loc(Term term) { return term >> 32; }
+// --- Term operations --- 
+Term term_new(Tag tag, Lab lab, Loc loc) {
+    return (((Term)tag & TAG_MASK) << (LAB_BITS + LOC_BITS)) |
+           (((Term)lab & LAB_MASK) << LOC_BITS) |
+           ((Term)loc & LOC_MASK);
+}
 
 static Term term_with_loc(Term term, Loc loc) {
-  return (((Term)loc) << 32) | (term & 0xFFFFFFFF);
+    return (term & ~LOC_MASK) | ((Term)loc & LOC_MASK);
 }
+
+u64 term_loc(Term term) { return term & LOC_MASK; }
+u64 term_lab(Term term) { return (term >> LOC_BITS) & LAB_MASK; }
+Tag term_tag(Term term) { return (term >> (LOC_BITS + LAB_BITS)) & TAG_MASK; }
 
 static bool term_has_loc(Term term) {
   Tag tag = term_tag(term);
@@ -357,14 +381,8 @@ void set(Loc loc, Term term) {
   atomic_store_explicit((a64*)&BUFF[loc], term, memory_order_relaxed);
 }
 
-static Pair take_pair(Loc loc) {
-  return *(Pair*)&BUFF[loc];
-}
 
-static void set_pair(Loc loc, Pair pair) {
-  *((Pair*)&BUFF[loc]) = pair;
-}
-
+// --- Booty Bag operations ---
 static Loc bbag_offset(u32 tid) {
   return tid * RBAG_LEN;
 }
@@ -448,6 +466,7 @@ static void bbag_return(TM *tm) {
   tm->sid = TPC;
 }
 
+// --- RBAG operations ---
 static Loc rbag_ini(u32 tid) {
   return bbag_ini(tid) + BBAG_LEN;
 }
@@ -460,6 +479,7 @@ static Loc rnod_ini(u32 tid) {
   return tid * NODE_LEN;
 }
 
+// --- Deferred Bag operations ---
 static Loc dfer_offset(u32 idx) {
   return DFER_INI + DFER_LEN * idx;
 }
@@ -479,12 +499,10 @@ static bool dfer_any(TM *tm) {
   return (tm->dput[0] > 0) || (tm->dput[1] > 0);
 }  
 
-// Allocator
-// ---------
-
+// --- Allocator --- 
 static Loc node_alloc(TM *tm, u32 cnt) {
   if (tm->nput + cnt >= NODE_LEN) {
-    fprintf(stderr, "%u node space exhausted, nput: %u, cnt: %u, LEN: %u\n",
+    fprintf(stderr, "%u node space exhausted, nput: %lu, cnt: %u, LEN: %u\n",
             tm->tid, tm->nput, cnt, NODE_LEN);
     exit(1);
   }
@@ -798,7 +816,7 @@ static inline void move(TM *tm, Loc neg_loc, Term pos) {
   }
 }
 
-// Interactions
+// --- Interactions ---
 static void interact_appref(TM *tm, Term neg, Loc pos_loc) {
   Term lam = expand_ref(tm, pos_loc);
   #ifdef DEBUG
@@ -905,206 +923,104 @@ static void interact_opynul(TM *tm, Loc a_loc) {
 }
 
 // Safer Utilities
-u32 u32_to_u32(u32 u) { return u; }
+u64 u64_to_u64(u32 u) { return u; }
 
-i32 u32_to_i32(u32 u) {
+i64 u64_to_i64(u64 u) {
   TypeConverter converter;
   converter.u = u;
   return converter.i;
 }
 
-f32 u32_to_f32(u32 u) {
+f64 u64_to_f64(u64 u) {
   TypeConverter converter;
   converter.u = u;
   return converter.f;
 }
 
-u32 i32_to_u32(i32 i) {
+u64 i64_to_u64(i32 i) {
   TypeConverter converter;
   converter.i = i;
   return converter.u;
 }
 
-u32 f32_to_u32(f32 f) {
+u32 f64_to_u64(f64 f) {
   TypeConverter converter;
   converter.f = f;
   return converter.u;
 }
 
-static void interact_opynum(TM *tm, Loc a_loc, Lab op, u32 y, Tag y_type) {
-  u32 x = term_loc(take(port(1, a_loc)));
+static void interact_opynum(TM *tm, Loc a_loc, Lab op, u64 y, Tag y_type) {
+  u64 x = term_loc(take(port(1, a_loc)));
   Loc ret = port(2, a_loc);
-  u32 res = 0;
-
-  // Optimized path using jump table & direct compute
-  if (y_type == U32) {
-    // Faster operation dispatch
-    static void *op_jumptable[] = {
-        [OP_ADD] = &&do_add, [OP_SUB] = &&do_sub, [OP_MUL] = &&do_mul,
-        [OP_DIV] = &&do_div, [OP_EQ] = &&do_eq,   [OP_NE] = &&do_ne,
-        [OP_LT] = &&do_lt,   [OP_GT] = &&do_gt,   [OP_LTE] = &&do_lte,
-        [OP_GTE] = &&do_gte, [OP_MOD] = &&do_mod, [OP_AND] = &&do_and,
-        [OP_OR] = &&do_or,   [OP_XOR] = &&do_xor, [OP_LSH] = &&do_lsh,
-        [OP_RSH] = &&do_rsh};
-
-    // Faster branching
-    goto *op_jumptable[op];
-
-  do_add:
-    res = x + y;
-    goto done;
-  do_sub:
-    res = x - y;
-    goto done;
-  do_mul:
-    res = x * y;
-    goto done;
-  do_div:
-    res = x / y;
-    goto done;
-  do_eq:
-    res = x == y;
-    goto done;
-  do_ne:
-    res = x != y;
-    goto done;
-  do_lt:
-    res = x < y;
-    goto done;
-  do_gt:
-    res = x > y;
-    goto done;
-  do_lte:
-    res = x <= y;
-    goto done;
-  do_gte:
-    res = x >= y;
-    goto done;
-  do_mod:
-    res = x % y;
-    goto done;
-  do_and:
-    res = x & y;
-    goto done;
-  do_or:
-    res = x | y;
-    goto done;
-  do_xor:
-    res = x ^ y;
-    goto done;
-  do_lsh:
-    res = x << y;
-    goto done;
-  do_rsh:
-    res = x >> y;
-    goto done;
-
-  done:;
-  } else {
-    // Inlined type conversion and operation for i32 and f32
-    switch (y_type) {
-    case I32: {
-      i32 a = u32_to_i32(x);
-      i32 b = u32_to_i32(y);
-      i32 val;
-      switch (op) {
-      case OP_ADD:
-        val = a + b;
-        break;
-      case OP_SUB:
-        val = a - b;
-        break;
-      case OP_MUL:
-        val = a * b;
-        break;
-      case OP_DIV:
-        val = a / b;
-        break;
-      case OP_EQ:
-        val = a == b;
-        break;
-      case OP_NE:
-        val = a != b;
-        break;
-      case OP_LT:
-        val = a < b;
-        break;
-      case OP_GT:
-        val = a > b;
-        break;
-      case OP_LTE:
-        val = a <= b;
-        break;
-      case OP_GTE:
-        val = a >= b;
-        break;
-      case OP_MOD:
-        val = a % b;
-        break;
-      case OP_AND:
-        val = a & b;
-        break;
-      case OP_OR:
-        val = a | b;
-        break;
-      case OP_XOR:
-        val = a ^ b;
-        break;
-      case OP_LSH:
-        val = a << b;
-        break;
-      case OP_RSH:
-        val = a >> b;
-        break;
-      default:
-        val = 0;
-      }
-      res = i32_to_u32(val);
-      break;
-    }
-    case F32: {
-      f32 a = u32_to_f32(x);
-      f32 b = u32_to_f32(y);
-      f32 val;
-      switch (op) {
-      case OP_ADD:
-        val = a + b;
-        break;
-      case OP_SUB:
-        val = a - b;
-        break;
-      case OP_MUL:
-        val = a * b;
-        break;
-      case OP_DIV:
-        val = a / b;
-        break;
-      case OP_EQ:
-        val = a == b;
-        break;
-      case OP_NE:
-        val = a != b;
-        break;
-      case OP_LT:
-        val = a < b;
-        break;
-      case OP_GT:
-        val = a > b;
-        break;
-      case OP_LTE:
-        val = a <= b;
-        break;
-      case OP_GTE:
-        val = a >= b;
-        break;
-      default:
-        val = 0;
-      }
-      res = f32_to_u32(val);
-      break;
-    }
-    }
-  }
+  u64 res;
+  
+  static void *dispatch[] = {
+    [0xC0] = &&u_add, [0xC1] = &&u_sub, [0xC2] = &&u_mul, [0xC3] = &&u_div,
+    [0xC4] = &&u_mod, [0xC5] = &&u_eq,  [0xC6] = &&u_ne,  [0xC7] = &&u_lt,
+    [0xC8] = &&u_gt,  [0xC9] = &&u_lte, [0xCA] = &&u_gte, [0xCB] = &&u_and,
+    [0xCC] = &&u_or,  [0xCD] = &&u_xor, [0xCE] = &&u_lsh, [0xCF] = &&u_rsh,
+    
+    [0xD0] = &&i_add, [0xD1] = &&i_sub, [0xD2] = &&i_mul, [0xD3] = &&i_div,
+    [0xD4] = &&i_mod, [0xD5] = &&i_eq,  [0xD6] = &&i_ne,  [0xD7] = &&i_lt,
+    [0xD8] = &&i_gt,  [0xD9] = &&i_lte, [0xDA] = &&i_gte, [0xDB] = &&i_and,
+    [0xDC] = &&i_or,  [0xDD] = &&i_xor, [0xDE] = &&i_lsh, [0xDF] = &&i_rsh,
+    
+    [0xE0] = &&f_add, [0xE1] = &&f_sub, [0xE2] = &&f_mul, [0xE3] = &&f_div,
+    [0xE4] = &&inv,   [0xE5] = &&f_eq,  [0xE6] = &&f_ne,  [0xE7] = &&f_lt,
+    [0xE8] = &&f_gt,  [0xE9] = &&f_lte, [0xEA] = &&f_gte, [0xEB] = &&inv,
+    [0xEC] = &&inv,   [0xED] = &&inv,   [0xEE] = &&inv,   [0xEF] = &&inv
+  };
+  
+  goto *dispatch[(y_type << 4) | op];
+  
+  u_add: res = x + y; goto done;
+  u_sub: res = x - y; goto done;
+  u_mul: res = x * y; goto done;
+  u_div: res = x / y; goto done;
+  u_mod: res = x % y; goto done;
+  u_eq:  res = x == y; goto done;
+  u_ne:  res = x != y; goto done;
+  u_lt:  res = x < y; goto done;
+  u_gt:  res = x > y; goto done;
+  u_lte: res = x <= y; goto done;
+  u_gte: res = x >= y; goto done;
+  u_and: res = x & y; goto done;
+  u_or:  res = x | y; goto done;
+  u_xor: res = x ^ y; goto done;
+  u_lsh: res = x << y; goto done;
+  u_rsh: res = x >> y; goto done;
+  
+  i_add: { i32 a = (i32)x, b = u64_to_i64(y); res = i64_to_u64(a + b); goto done; }
+  i_sub: { i32 a = (i32)x, b = u64_to_i64(y); res = i64_to_u64(a - b); goto done; }
+  i_mul: { i32 a = (i32)x, b = u64_to_i64(y); res = i64_to_u64(a * b); goto done; }
+  i_div: { i32 a = (i32)x, b = u64_to_i64(y); res = i64_to_u64(a / b); goto done; }
+  i_mod: { i32 a = (i32)x, b = u64_to_i64(y); res = i64_to_u64(a % b); goto done; }
+  i_eq:  { i32 a = (i32)x, b = u64_to_i64(y); res = i64_to_u64(a == b); goto done; }
+  i_ne:  { i32 a = (i32)x, b = u64_to_i64(y); res = i64_to_u64(a != b); goto done; }
+  i_lt:  { i32 a = (i32)x, b = u64_to_i64(y); res = i64_to_u64(a < b); goto done; }
+  i_gt:  { i32 a = (i32)x, b = u64_to_i64(y); res = i64_to_u64(a > b); goto done; }
+  i_lte: { i32 a = (i32)x, b = u64_to_i64(y); res = i64_to_u64(a <= b); goto done; }
+  i_gte: { i32 a = (i32)x, b = u64_to_i64(y); res = i64_to_u64(a >= b); goto done; }
+  i_and: { i32 a = (i32)x, b = u64_to_i64(y); res = i64_to_u64(a & b); goto done; }
+  i_or:  { i32 a = (i32)x, b = u64_to_i64(y); res = i64_to_u64(a | b); goto done; }
+  i_xor: { i32 a = (i32)x, b = u64_to_i64(y); res = i64_to_u64(a ^ b); goto done; }
+  i_lsh: { i32 a = (i32)x, b = u64_to_i64(y); res = i64_to_u64(a << b); goto done; }
+  i_rsh: { i32 a = (i32)x, b = u64_to_i64(y); res = i64_to_u64(a >> b); goto done; }
+  
+  f_add: { f64 a = u64_to_f64(x), b = u64_to_f64(y); res = f64_to_u64(a + b); goto done; }
+  f_sub: { f64 a = u64_to_f64(x), b = u64_to_f64(y); res = f64_to_u64(a - b); goto done; }
+  f_mul: { f64 a = u64_to_f64(x), b = u64_to_f64(y); res = f64_to_u64(a * b); goto done; }
+  f_div: { f64 a = u64_to_f64(x), b = u64_to_f64(y); res = f64_to_u64(a / b); goto done; }
+  f_eq:  { f64 a = u64_to_f64(x), b = u64_to_f64(y); res = f64_to_u64(a == b); goto done; }
+  f_ne:  { f64 a = u64_to_f64(x), b = u64_to_f64(y); res = f64_to_u64(a != b); goto done; }
+  f_lt:  { f64 a = u64_to_f64(x), b = u64_to_f64(y); res = f64_to_u64(a < b); goto done; }
+  f_gt:  { f64 a = u64_to_f64(x), b = u64_to_f64(y); res = f64_to_u64(a > b); goto done; }
+  f_lte: { f64 a = u64_to_f64(x), b = u64_to_f64(y); res = f64_to_u64(a <= b); goto done; }
+  f_gte: { f64 a = u64_to_f64(x), b = u64_to_f64(y); res = f64_to_u64(a >= b); goto done; }
+  
+  inv: res = 0; // fallback
+  
+done:
   move(tm, ret, term_new(y_type, 0, res));
 }
 
@@ -1477,6 +1393,7 @@ static bool timeout(u64 tick) {
   return false;
 }
 
+// --- Core binding (APPLE) ---
 #ifdef __APPLE__
 #include <mach/mach.h>
 #include <mach/thread_policy.h>
@@ -1509,6 +1426,7 @@ static void bind_core(int tid) {
 }
 #endif // __APPLE__
 
+// --- Core thread function ---
 static void* thread_func(void* arg) {
   int thread_id = (u64)arg;
 
@@ -1565,6 +1483,7 @@ static void* thread_func(void* arg) {
   return NULL;
 }
 
+// --- Parallel normalization ---
 static void parallel_normalize() {
   atomic_store_explicit(&net.idle, TPC-1, memory_order_relaxed);
 
@@ -1576,6 +1495,7 @@ static void parallel_normalize() {
   }
 }
 
+// --- Core Normalization ---
 Term normalize(Term term) {
   if (term_tag(term) != REF) {
     fprintf(stderr, "normalizing non-ref\n");
@@ -1595,7 +1515,7 @@ Term normalize(Term term) {
   return get(0);
 }
 
-// Debugging
+// --- Debugging ---
 static char *tag_to_str(Tag tag) {
   switch (tag) {
   case 0:
@@ -1636,61 +1556,18 @@ static char *tag_to_str(Tag tag) {
   }
 }
 
-__attribute__((unused))
-static const char* term_str(char* buf, Term term) {
-  snprintf(buf, 64, "%s lab:%u loc:%u", tag_to_str(term_tag(term)),
+__attribute__((unused)) static const char *term_str(char *buf, Term term) {
+  snprintf(buf, 64, "%s lab:%lu loc:%lu", tag_to_str(term_tag(term)),
            term_lab(term), term_loc(term));
   return buf;
 }
 
 static void dump_term(Loc loc) {
   Term term = get(loc);
-  printf("%04u %03u %03u %s\n", loc, term_loc(term), term_lab(term),
-      tag_to_str(term_tag(term)));
+  printf("%04lu %03lu %03lu %s\n", loc, term_loc(term), term_lab(term),
+         tag_to_str(term_tag(term)));
 }
 
-// FILE VERSION: (or you can >> the stdio into a file)
-// NOTE: broken don't use without fixing.
-/*void dump_buff() {*/
-/*  FILE *file = fopen("multi.txt", "w");*/
-/*  if (file == NULL) {*/
-/*    perror("Error opening file");*/
-/*    return;*/
-/*  }*/
-/**/
-/*  fprintf(file, "------------------\n");*/
-/*  fprintf(file, "      NODES\n");*/
-/*  fprintf(file, "ADDR   LOC LAB TAG\n");*/
-/*  fprintf(file, "------------------\n");*/
-/*  for (Loc loc = RNOD_INI; loc < RNOD_END; loc++) {*/
-/*    Term term = get(loc);*/
-/*    Loc t_loc = term_loc(term);*/
-/*    Lab t_lab = term_lab(term);*/
-/*    Tag t_tag = term_tag(term);*/
-/*    fprintf(file, "%06X %03X %03X %s\n", loc, term_loc(term),
- * term_lab(term),*/
-/*            tag_to_str(term_tag(term)));*/
-/*  }*/
-/**/
-/*  fprintf(file, "------------------\n");*/
-/*  fprintf(file, "    REDEX BAG\n");*/
-/*  fprintf(file, "ADDR   LOC LAB TAG\n");*/
-/*  fprintf(file, "------------------\n");*/
-/*  for (Loc loc = RBAG + RBAG_INI; loc < RBAG + RBAG_END; loc++) {*/
-/*    Term term = get(loc);*/
-/*    Loc t_loc = term_loc(term);*/
-/*    Lab t_lab = term_lab(term);*/
-/*    Tag t_tag = term_tag(term);*/
-/*    fprintf(file, "%06X %03X %03X %s\n", loc, term_loc(term),
- * term_lab(term),*/
-/*            tag_to_str(term_tag(term)));*/
-/*  }*/
-/**/
-/*  fprintf(file, "------------------\n");*/
-/**/
-/*  fclose(file);*/
-/*}*/
-// STD VERSION
 void tm_dump_buff(TM *tm) {
   printf("------------------\n");
   printf("      NODES\n");
@@ -1709,7 +1586,5 @@ void tm_dump_buff(TM *tm) {
   printf("------------------\n");
   fflush(stdout);
 }
- 
-void dump_buff() {
-  tm_dump_buff(tms[0]);
-}
+
+void dump_buff() { tm_dump_buff(tms[0]); }

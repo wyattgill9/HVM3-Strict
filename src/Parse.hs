@@ -148,9 +148,9 @@ readMaybeNumeric :: String -> Maybe PCore
 readMaybeNumeric text = do
   let (<|>) = (Applicative.<|>)
 
-  fmap PU32 (readMaybe text :: Maybe Word32) <|>
-    fmap PI32 (readMaybe text :: Maybe Int32) <|>
-    fmap PF32 (readMaybe text :: Maybe Float)
+  fmap PU52 (readMaybe text :: Maybe Word64) <|>
+    fmap PI52 (readMaybe text :: Maybe Int64) <|>
+    fmap PF52 (readMaybe text :: Maybe Double)
 
 skip :: Parser ()
 skip = skipMany (parseSpace <|> parseComment) where

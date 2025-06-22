@@ -9,7 +9,7 @@ import qualified Data.Map as Map
 type VarMap = Map.Map String Loc
 
 -- Maps definition string names to their (eventual) index in the book.
-type DefMap = Map.Map String Word32
+type DefMap = Map.Map String Word64
 
 
 -- Core to Runtime
@@ -24,7 +24,7 @@ injectPCore (PVar name) loc defs vars = case (Map.lookup name vars, loc) of
     putStrLn $ "injectPCore: invalid VAR (" ++ name ++ ")"
     return (vars, _VOID_)
 injectPCore (PRef name) loc defs vars = case Map.lookup name defs of
-  Just idx -> return (vars, termNew REF 0 idx)
+  Just idx -> return (vars, termNew REF 0 (fromIntegral idx))
   Nothing -> do
     putStrLn $ "injectPCore: unknown definition (" ++ name ++ ")"
     return (vars, _VOID_)
@@ -44,12 +44,12 @@ injectPCore (PSup tm1 tm2) loc defs vars = do
   set (sup + 0) tm1
   set (sup + 1) tm2
   return (vars, termNew SUP 0 sup)
-injectPCore (PU32 num) loc defs vars =
-  return (vars, termNew U32 0 num)
-injectPCore (PI32 num) loc defs vars =
-  return (vars, termNew I32 0 (int32ToWord32 num))
-injectPCore (PF32 num) loc defs vars =
-  return (vars, termNew F32 0 (floatToWord32 num))
+injectPCore (PU52 num) loc defs vars =
+  return (vars, termNew U52 0 num)
+injectPCore (PI52 num) loc defs vars =
+  return (vars, termNew I52 0 (int64ToWord64 num))
+injectPCore (PF52 num) loc defs vars =
+  return (vars, termNew F52 0 (doubleToWord64 num))
 
 injectNCore :: NCore -> Maybe Loc -> DefMap -> VarMap -> IO (VarMap, Term)
 injectNCore (NSub name) loc defs vars = case (Map.lookup name vars, loc) of
@@ -97,7 +97,7 @@ injectNCore (NMat ret arms) _ defs vars = do
     (vars, arm) <- injectPCore arm (Just (mt1 + i)) defs vars;
     set (mt1 + i) arm;
     return vars
-  }) vars (zip [0..num-1] arms)
+  }) vars (zip [0.. fromIntegral num-1] arms)
   return (vars, termNew MAT num mt0)
 
 -- Dex, Net, and Book Injection
