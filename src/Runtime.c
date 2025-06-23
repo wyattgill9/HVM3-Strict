@@ -20,9 +20,6 @@
 // #define SUMMARY
 //#define DEBUG
 
-#define likely(x)   __builtin_expect(!!(x), 1)
-#define unlikely(x) __builtin_expect(!!(x), 0)
-
 #ifdef __APPLE__
 // Store barrier
 extern void dmb_ishst(void);
@@ -91,19 +88,21 @@ typedef size_t usize;
 typedef ptrdiff_t isize;
 
 // --- CORE TYPES ---
-typedef u64 Term; // [ Loc:54 | Lab:8 | Tag:4 ]
+typedef u64 Term;
 typedef u64 Loc;
 typedef u8 Lab;
 typedef u8 Tag;
 
 typedef u128 Pair;
 
-#define TAG_BITS 4
-#define LAB_BITS 8 
-#define LOC_BITS 52 
-#define TAG_MASK ((1ULL << TAG_BITS) - 1)
-#define LAB_MASK ((1ULL << LAB_BITS) - 1)
-#define LOC_MASK ((1ULL << LOC_BITS) - 1)
+// [Loc:48 | Lab:8 | Tag:8]
+#define TAG_BITS 8
+#define LAB_BITS 8
+#define LOC_BITS 48
+
+#define TAG_MASK ((1ULL << TAG_BITS) - 1)   // 0xFF
+#define LAB_MASK ((1ULL << LAB_BITS) - 1)   // 0xFF
+#define LOC_MASK ((1ULL << LOC_BITS) - 1)   // 0xFFFFFFFFFFFF
 
 // -- Type Conversion --
 typedef union {
@@ -341,19 +340,29 @@ static void set_pair(Loc loc, Pair pair) {
 }
 
 // --- Term operations --- 
-Term term_new(Tag tag, Lab lab, Loc loc) {
-    return (((Term)tag & TAG_MASK) << (LAB_BITS + LOC_BITS)) |
-           (((Term)lab & LAB_MASK) << LOC_BITS) |
-           ((Term)loc & LOC_MASK);
+
+extern inline Term term_new(Tag tag, Lab lab, Loc loc) {
+    return ((Term)loc << (LAB_BITS + TAG_BITS)) |
+           ((Term)lab << TAG_BITS) |
+           ((Term)tag & TAG_MASK);
 }
 
-static Term term_with_loc(Term term, Loc loc) {
-    return (term & ~LOC_MASK) | ((Term)loc & LOC_MASK);
+extern inline Term term_with_loc(Term term, Loc loc) {
+    return (term & ~((Term)LOC_MASK << (LAB_BITS + TAG_BITS))) | 
+           (((Term)loc & LOC_MASK) << (LAB_BITS + TAG_BITS));
 }
 
-u64 term_loc(Term term) { return term & LOC_MASK; }
-u64 term_lab(Term term) { return (term >> LOC_BITS) & LAB_MASK; }
-Tag term_tag(Term term) { return (term >> (LOC_BITS + LAB_BITS)) & TAG_MASK; }
+extern inline Loc term_loc(Term term) {
+    return term >> (LAB_BITS + TAG_BITS);
+}
+
+extern inline Lab term_lab(Term term) {
+    return (term >> TAG_BITS) & LAB_MASK;
+}
+
+extern inline Tag term_tag(Term term) {
+    return term & TAG_MASK;
+}
 
 static bool term_has_loc(Term term) {
   Tag tag = term_tag(term);
@@ -1570,14 +1579,14 @@ static char *tag_to_str(Tag tag) {
 }
 
 __attribute__((unused)) static const char *term_str(char *buf, Term term) {
-  snprintf(buf, 64, "%s lab:%lu loc:%lu", tag_to_str(term_tag(term)),
+  snprintf(buf, 64, "%s lab:%u loc:%lu", tag_to_str(term_tag(term)),
            term_lab(term), term_loc(term));
   return buf;
 }
 
 static void dump_term(Loc loc) {
   Term term = get(loc);
-  printf("%04lu %03lu %03lu %s\n", loc, term_loc(term), term_lab(term),
+  printf("%04lu %03lu %03u %s\n", loc, term_loc(term), term_lab(term),
          tag_to_str(term_tag(term)));
 }
 
