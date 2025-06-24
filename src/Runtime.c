@@ -125,7 +125,7 @@ enum : u64 {
   CACH_U64 = CACH_SIZ / sizeof(u64),
 
   // --- Number of threads ---
-  TPC = 12,
+  TPC = 10,
 
   #ifdef __APPLE__
   // PCores and ECores total, and in-use
@@ -515,7 +515,7 @@ static bool dfer_any(TM *tm) {
 // --- Allocator --- 
 static Loc node_alloc(TM *tm, u32 cnt) {
   if (tm->nput + cnt >= NODE_LEN) {
-    fprintf(stderr, "%u node space exhausted, nput: %lu, cnt: %u, LEN: %u\n",
+    fprintf(stderr, "%u node space exhausted, nput: %llu, cnt: %u, LEN: %u\n",
             tm->tid, tm->nput, cnt, NODE_LEN);
     exit(1);
   }
@@ -1579,14 +1579,14 @@ static char *tag_to_str(Tag tag) {
 }
 
 __attribute__((unused)) static const char *term_str(char *buf, Term term) {
-  snprintf(buf, 64, "%s lab:%u loc:%lu", tag_to_str(term_tag(term)),
+  snprintf(buf, 64, "%s lab:%u loc:%llu", tag_to_str(term_tag(term)),
            term_lab(term), term_loc(term));
   return buf;
 }
 
 static void dump_term(Loc loc) {
   Term term = get(loc);
-  printf("%04lu %03lu %03u %s\n", loc, term_loc(term), term_lab(term),
+  printf("%04llu %03llu %03u %s\n", loc, term_loc(term), term_lab(term),
          tag_to_str(term_tag(term)));
 }
 
