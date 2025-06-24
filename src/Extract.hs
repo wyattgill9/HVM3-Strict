@@ -29,9 +29,9 @@ extractPCore term = case termTag term of
     tm1' <- extractPCore tm1
     tm2' <- extractPCore tm2
     return $ PSup tm1' tm2'
-  U52 -> return $ PU52 (termLoc term)
-  I52 -> return $ PI52 (word64ToInt64 $ termLoc term)
-  F52 -> return $ PF52 (word64ToDouble $ termLoc term)
+  U48 -> return $ PU48 (termLoc term)
+  I48 -> return $ PI48 (word64ToInt64 $ termLoc term)
+  F48 -> return $ PF48 (word64ToDouble $ termLoc term)
 
 -- Convert a term in memory to a NCore.
 -- The optional location is the location of the term
@@ -78,9 +78,9 @@ extractVar loc term = case termTag term of
   LAM -> extractPCore term
   SUP -> extractPCore term
   SUB -> return $ PVar ("v" ++ show loc)
-  U52 -> return $ PU52 (termLoc term)
-  I52 -> return $ PI52 (word64ToInt64 $ termLoc term)
-  F52 -> return $ PF52 (word64ToDouble $ termLoc term)
+  U48 -> return $ PU48 (termLoc term)
+  I48 -> return $ PI48 (word64ToInt64 $ termLoc term)
+  F48 -> return $ PF48 (word64ToDouble $ termLoc term)
   tag -> do
     putStrLn $ "extractVar: unexpected tag " ++ show tag
     return PNul

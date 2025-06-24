@@ -44,12 +44,12 @@ injectPCore (PSup tm1 tm2) loc defs vars = do
   set (sup + 0) tm1
   set (sup + 1) tm2
   return (vars, termNew SUP 0 sup)
-injectPCore (PU52 num) loc defs vars =
-  return (vars, termNew U52 0 num)
-injectPCore (PI52 num) loc defs vars =
-  return (vars, termNew I52 0 (int64ToWord64 num))
-injectPCore (PF52 num) loc defs vars =
-  return (vars, termNew F52 0 (doubleToWord64 num))
+injectPCore (PU48 num) loc defs vars =
+  return (vars, termNew U48 0 num)
+injectPCore (PI48 num) loc defs vars =
+  return (vars, termNew I48 0 (int64ToWord64 num))
+injectPCore (PF48 num) loc defs vars =
+  return (vars, termNew F48 0 (doubleToWord64 num))
 
 injectNCore :: NCore -> Maybe Loc -> DefMap -> VarMap -> IO (VarMap, Term)
 injectNCore (NSub name) loc defs vars = case (Map.lookup name vars, loc) of

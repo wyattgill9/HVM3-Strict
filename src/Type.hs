@@ -17,9 +17,9 @@ data PCore
   | PNul
   | PLam NCore PCore
   | PSup PCore PCore
-  | PU52 Word64
-  | PI52 Int64
-  | PF52 Double
+  | PU48 Word64
+  | PI48 Int64
+  | PF48 Double
   deriving (Show, Eq)
 
 data NCore
@@ -76,9 +76,9 @@ data Tag
   | REF
   | OPX
   | OPY
-  | U52
-  | I52
-  | F52
+  | U48
+  | I48
+  | F48
   | MAT
   deriving (Enum, Eq, Show)
 
